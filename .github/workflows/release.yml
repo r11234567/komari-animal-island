@@ -1,0 +1,89 @@
+name: Release
+
+# 打 v* 标签即发布：构建 → 校验主题契约 → 打包 → 附 SHA-256 上传 Release。
+# 主题市场收录需要 ZIP 的下载地址与 SHA-256 校验值。
+on:
+  push:
+    tags:
+      - "v*"
+  # 允许手动跑一次，用于验证流程本身（产物走 artifact，不建 Release）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify theme contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 站点描述是字面替换：dist/index.html 里必须留着这句原文，
+          # 否则后台设置的描述不会被注入（标题走正则，任何 <title> 都会被替换）。
+          if ! grep -qF 'A simple server monitor tool.' dist/index.html; then
+            echo "::error::dist/index.html 缺少站点描述锚点 'A simple server monitor tool.'"
+            exit 1
+          fi
+
+          # 站点语言只识别 lang="en"、lang='en' 或根元素完全不带 lang 三种写法。
+          if ! grep -qE '<html([^>]*\slang=["'"'"']en["'"'"'][^>]*)?>' dist/index.html; then
+            echo "::error::dist/index.html 的 <html> 需为 lang=\"en\" 或不带 lang，否则站点语言设置会被忽略"
+            exit 1
+          fi
+
+          # 自定义 head/body 与主题热重载脚本都靠这两个闭合标签定位。
+          for tag in '</head>' '</body>'; do
+            if ! grep -qF "$tag" dist/index.html; then
+              echo "::error::dist/index.html 缺少 $tag，自定义注入会失效"
+              exit 1
+            fi
+          done
+
+          # 包内 manifest 版本必须与 tag 一致，否则主题市场的自动更新会拒绝
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            manifest_version="$(node -p "require('./komari-theme.json').version")"
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "$manifest_version" != "$tag_version" ]; then
+              echo "::error::komari-theme.json 的 version ($manifest_version) 与 tag ($tag_version) 不一致"
+              exit 1
+            fi
+          fi
+
+      # 打包脚本自己会拦下划线开头的产物（go embed 会忽略它们）
+      - name: Package
+        run: node scripts/package-zip.mjs
+
+      - name: Show checksum
+        run: cat theme-package/*.zip.sha256
+
+      - name: Create release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            theme-package/*.zip
+            theme-package/*.zip.sha256
+          generate_release_notes: true
+
+      - name: Upload artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: theme-package
+          path: theme-package/

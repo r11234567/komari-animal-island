@@ -2,13 +2,14 @@
   "name": "komari-animal-island-theme",
   "description": "使用 Animal Island UI 构建的温暖游戏风简单的Komari 监控主题",
   "private": true,
-  "version": "1.0.6",
+  "version": "1.0.7",
   "license": "CC-BY-NC-4.0",
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.config.ts",
     "build": "tsc -b && vite build --config vite.config.ts",
-    "preview": "vite preview --config vite.config.ts"
+    "preview": "vite preview --config vite.config.ts",
+    "package": "npm run build && node scripts/package-zip.mjs"
   },
   "dependencies": {
     "animal-island-ui": "^1.6.0",
