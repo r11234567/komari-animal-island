@@ -1,103 +1,218 @@
+import { timestampDate, timestampFromDate } from '@bufbuild/protobuf/wkt';
+import { AgentStatus } from '@komari/proto/komari/browser/v1/browser_pb';
+import type {
+  AgentSummary,
+  GetPublicInfoResponse,
+} from '@komari/proto/komari/browser/v1/browser_pb';
+import type { PingStat } from '@komari/proto/komari/metrics/v1/metrics_pb';
+import type { AgentReport } from '@komari/proto/komari/report/v1/report_pb';
+import { browser, metrics } from './connect';
 import { mockLive, mockNodes, mockSettings } from './mock';
 import type { LiveState, NodeInfo, PublicSettings } from './types';
 
-async function request<T>(url: string): Promise<T> {
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  const payload = await response.json();
-  if (payload?.status && payload.status !== 'success') throw new Error(payload.message || '请求失败');
-  return payload?.data ?? payload;
-}
+const PING_WINDOW_HOURS = 1;
+const RECONNECT_DELAY_MS = 2000;
+
+/** protobuf 的 uint64 在 TS 里是 bigint，主题各处按 number 计算。 */
+const asNumber = (value?: bigint) => Number(value ?? 0n);
+
+const publicSettingsOf = (info: GetPublicInfoResponse): PublicSettings => ({
+  sitename: info.siteName,
+  description: info.siteDescription,
+  disable_password_login: info.disablePasswordLogin,
+  oauth_enable: info.oauthEnabled,
+  oauth_provider: info.oauthProvider,
+  theme_settings: (info.themeSettings ?? {}) as PublicSettings['theme_settings'],
+});
+
+const nodeInfoOf = (agent: AgentSummary): NodeInfo => {
+  const basic = agent.basicInfo;
+  return {
+    uuid: agent.agentId,
+    name: agent.name,
+    region: basic?.region,
+    group: basic?.group,
+    virtualization: basic?.virtualization,
+    arch: basic?.architecture,
+    os: basic?.os,
+    cpu_name: basic?.cpuName,
+    cpu_cores: basic?.cpuCores,
+    mem_total: asNumber(basic?.memoryTotalBytes),
+    swap_total: asNumber(basic?.swapTotalBytes),
+    disk_total: asNumber(basic?.diskTotalBytes),
+    public_remark: basic?.publicRemark,
+    price: basic?.price,
+    // 一次性付费在数据模型里是负周期，无符号的 billing_cycle_days 装不下，
+    // 服务端改用独立标志下发，这里还原成主题各处沿用的 -1。
+    billing_cycle: basic?.billingOneTime ? -1 : basic?.billingCycleDays,
+    auto_renewal: basic?.autoRenewal,
+    currency: basic?.currency,
+    expired_at: basic?.expiresAt ? timestampDate(basic.expiresAt).toISOString() : null,
+  };
+};
+
+/**
+ * AgentReport 转实时状态。
+ *
+ * 不填 ping：状态推送只带主机自身的指标，逐任务延迟由 GetPingStats 提供，
+ * 界面已有「实时延迟 ?? 轮询延迟」的取值顺序，留空即自动落到后者。
+ */
+const liveStateOf = (report?: AgentReport): LiveState => {
+  const resources = report?.resources;
+  // Agent 会额外上报一条名为 aggregate 的汇总项；没有时退回第一块网卡/磁盘。
+  const network = report?.networkInterfaces.find((item) => item.name === 'aggregate')
+    ?? report?.networkInterfaces[0];
+  const disk = report?.disks.find((item) => item.mountPoint === 'aggregate') ?? report?.disks[0];
+  return {
+    cpu: { usage: resources?.cpuPercent ?? 0 },
+    ram: {
+      used: asNumber(resources?.memoryUsedBytes),
+      total: asNumber(report?.system?.memoryTotalBytes),
+    },
+    swap: {
+      used: asNumber(resources?.swapUsedBytes),
+      total: asNumber(resources?.swapTotalBytes),
+    },
+    disk: { used: asNumber(disk?.usedBytes), total: asNumber(disk?.totalBytes) },
+    network: {
+      up: asNumber(network?.bytesSentPerSecond),
+      down: asNumber(network?.bytesReceivedPerSecond),
+      totalUp: asNumber(network?.bytesSent),
+      totalDown: asNumber(network?.bytesReceived),
+    },
+    load: {
+      load1: resources?.loadAverage[0] ?? 0,
+      load5: resources?.loadAverage[1] ?? 0,
+      load15: resources?.loadAverage[2] ?? 0,
+    },
+    connections: {
+      tcp: asNumber(resources?.tcpConnectionCount),
+      udp: asNumber(resources?.udpConnectionCount),
+    },
+    uptime: report?.system?.uptime ? Number(report.system.uptime.seconds) : 0,
+    process: asNumber(resources?.processCount),
+    updated_at: report?.observedAt ? timestampDate(report.observedAt).toISOString() : '',
+  };
+};
 
 export async function loadInitialData() {
   try {
-    const [settings, nodes] = await Promise.all([
-      request<PublicSettings>('/api/public'),
-      request<NodeInfo[]>('/api/nodes'),
+    const [info, list] = await Promise.all([
+      browser.getPublicInfo({}),
+      browser.listAgents({}),
     ]);
-    return { settings, nodes, live: {} as Record<string, LiveState>, demo: false };
+    return {
+      settings: publicSettingsOf(info),
+      nodes: list.agents.map(nodeInfoOf),
+      live: {} as Record<string, LiveState>,
+      demo: false,
+    };
   } catch {
     return { settings: mockSettings, nodes: mockNodes, live: mockLive, demo: true };
   }
 }
 
-type PingRecords = {
-  records?: Array<{ task_id?: number | string; value?: number; time?: string }>;
-  tasks?: Array<{ id?: number | string; task_id?: number | string; name?: string; avg?: number }>;
-};
+/**
+ * 当前访客的登录态。
+ *
+ * 登录与 OAuth 本身仍走 REST：前者需要服务端写下会话 Cookie，后者是浏览器跳转，
+ * 都不是 RPC 能表达的形态。
+ */
+export async function loadSession() {
+  try {
+    const session = await browser.getSession({});
+    return { loggedIn: session.loggedIn, username: session.username };
+  } catch {
+    // 拿不到会话状态时按未登录处理，登录弹窗仍可用。
+    return { loggedIn: false, username: '' };
+  }
+}
 
 export type NetworkLatency = { taskId: number; name: string; latency: number | null };
 
+/** 服务端已算好统计量，均值缺失时退到最近一次采样。 */
+const statLatency = (stat: PingStat) => {
+  for (const candidate of [stat.average, stat.latest]) {
+    if (candidate !== undefined && Number.isFinite(candidate) && candidate >= 0) return candidate;
+  }
+  return null;
+};
+
+/** 一次取回全部节点的延迟统计，替代过去按节点逐个请求历史记录。 */
+const loadPingStats = async (nodeIds: string[]) => {
+  const end = new Date();
+  const start = new Date(end.getTime() - PING_WINDOW_HOURS * 3_600_000);
+  const response = await metrics.getPingStats({
+    agentIds: nodeIds,
+    startTime: timestampFromDate(start),
+    endTime: timestampFromDate(end),
+  });
+  return response.stats;
+};
+
 export async function loadPingLatencies(nodeIds: string[]) {
-  let hasTasks = false;
+  const empty = Object.fromEntries(nodeIds.map((uuid) => [uuid, null])) as Record<string, number | null>;
+
+  let hasTasks = true;
   try {
-    const tasks = await request<Array<Record<string, unknown>>>('/api/task/ping');
-    hasTasks = Array.isArray(tasks) && tasks.some((task) => task.enabled !== false && task.disabled !== true);
+    const tasks = await metrics.listPingTasks({});
+    hasTasks = tasks.tasks.length > 0;
   } catch {
-    // 旧版 Komari 可能没有公开任务端点，保留历史记录兼容路径。
+    // 拿不到公开任务列表时不下「没有任务」的结论，继续尝试读统计。
     hasTasks = true;
   }
+  if (!hasTasks) return { values: empty, hasTasks: false };
 
-  if (!hasTasks) {
-    return { values: Object.fromEntries(nodeIds.map((uuid) => [uuid, null])) as Record<string, number | null>, hasTasks: false };
-  }
-
-  const entries = await Promise.all(nodeIds.map(async (uuid) => {
-    try {
-      const data = await request<PingRecords>(`/api/records/ping?uuid=${encodeURIComponent(uuid)}&hours=1`);
-      const taskValues = (data.tasks || []).map((task) => Number(task.avg)).filter((value) => Number.isFinite(value) && value >= 0);
-      if (taskValues.length) return [uuid, Math.round(taskValues.reduce((sum, value) => sum + value, 0) / taskValues.length)] as const;
-      const latest = [...(data.records || [])].reverse().find((record) => Number(record.value) >= 0);
-      return [uuid, latest ? Math.round(Number(latest.value)) : null] as const;
-    } catch {
-      return [uuid, null] as const;
+  try {
+    const totals = new Map<string, { sum: number; count: number }>();
+    for (const stat of await loadPingStats(nodeIds)) {
+      const latency = statLatency(stat);
+      if (latency === null) continue;
+      const bucket = totals.get(stat.agentId) ?? { sum: 0, count: 0 };
+      bucket.sum += latency;
+      bucket.count += 1;
+      totals.set(stat.agentId, bucket);
     }
-  }));
-  return { values: Object.fromEntries(entries) as Record<string, number | null>, hasTasks: true };
+    const values = { ...empty };
+    for (const [uuid, bucket] of totals) values[uuid] = Math.round(bucket.sum / bucket.count);
+    return { values, hasTasks: true };
+  } catch {
+    return { values: empty, hasTasks: true };
+  }
 }
 
 export async function loadNetworkLatencies(nodeIds: string[], taskNames: string[]) {
   const normalizedNames = [...new Set(taskNames.map((name) => name.trim()).filter(Boolean))];
   if (!normalizedNames.length) return {} as Record<string, NetworkLatency[]>;
-  let activeTaskNames: Set<string> | null = null;
-  try {
-    const activeTasks = await request<Array<{ name?: string; enabled?: boolean; disabled?: boolean }>>('/api/task/ping');
-    activeTaskNames = new Set(activeTasks
-      .filter((task) => task.enabled !== false && task.disabled !== true)
-      .map((task) => task.name?.trim())
-      .filter((name): name is string => Boolean(name)));
-  } catch {
-    // 旧版或未公开任务端点时，使用记录接口返回的任务列表。
-  }
 
-  const entries = await Promise.all(nodeIds.map(async (uuid) => {
-    try {
-      const data = await request<PingRecords>(`/api/records/ping?uuid=${encodeURIComponent(uuid)}&hours=1`);
-      const tasks = data.tasks || [];
-      const records = data.records || [];
-      const values = normalizedNames.flatMap<NetworkLatency>((configuredName) => {
-        if (activeTaskNames && !activeTaskNames.has(configuredName)) return [];
-        const task = tasks.find((candidate) => candidate.name?.trim() === configuredName);
-        if (!task) return [];
-        const taskId = Number(task.id ?? task.task_id);
-        if (!Number.isFinite(taskId) || taskId <= 0) return [];
-        const taskAverage = typeof task.avg === 'number' ? task.avg : Number.NaN;
-        if (Number.isFinite(taskAverage) && taskAverage >= 0) {
-          return [{ taskId, name: configuredName, latency: Math.round(taskAverage) }];
-        }
-        const samples = records
-          .filter((record) => Number(record.task_id) === taskId)
-          .map((record) => Number(record.value))
-          .filter((value) => Number.isFinite(value) && value >= 0);
-        if (!samples.length) return [{ taskId, name: configuredName, latency: null }];
-        return [{ taskId, name: configuredName, latency: Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length) }];
+  try {
+    const byNode = new Map<string, Map<string, PingStat>>();
+    for (const stat of await loadPingStats(nodeIds)) {
+      const name = stat.name.trim();
+      if (!name) continue;
+      const tasks = byNode.get(stat.agentId) ?? new Map<string, PingStat>();
+      // 同名任务保留先到的一条，与过去按名字查找的行为一致。
+      if (!tasks.has(name)) tasks.set(name, stat);
+      byNode.set(stat.agentId, tasks);
+    }
+    // 配置里写了但服务端没有对应任务的名字直接跳过，不占位。
+    return Object.fromEntries(nodeIds.map((uuid) => {
+      const tasks = byNode.get(uuid);
+      const values = normalizedNames.flatMap<NetworkLatency>((name) => {
+        const stat = tasks?.get(name);
+        if (!stat) return [];
+        const latency = statLatency(stat);
+        return [{
+          taskId: Number(stat.taskId),
+          name,
+          latency: latency === null ? null : Math.round(latency),
+        }];
       });
       return [uuid, values] as const;
-    } catch {
-      return [uuid, []] as const;
-    }
-  }));
-  return Object.fromEntries(entries) as Record<string, NetworkLatency[]>;
+    })) as Record<string, NetworkLatency[]>;
+  } catch {
+    return Object.fromEntries(nodeIds.map((uuid) => [uuid, []])) as Record<string, NetworkLatency[]>;
+  }
 }
 
 export function connectLive(
@@ -106,120 +221,93 @@ export function connectLive(
   requestedInterval = 3000,
 ) {
   if (!location.protocol.startsWith('http')) return () => undefined;
-  const interval = Math.max(1000, Math.min(60000, requestedInterval));
-  let timer: number | undefined;
-  let controller: AbortController | undefined;
-  let legacySocket: WebSocket | undefined;
+
+  // WatchAgentStatus 由服务端推送，主题设置里的「更新间隔」因此改为约束渲染频率：
+  // 节点较多时每条事件都触发一次重渲染会明显掉帧。
+  const flushInterval = Math.max(1000, Math.min(60000, requestedInterval));
+  const online = new Set<string>();
+  const live: Record<string, LiveState> = {};
+
   let stopped = false;
-  let running = false;
-  let requestId = 0;
+  let controller: AbortController | undefined;
+  let flushTimer: number | undefined;
+  let pending = false;
+  let afterEventId = '';
 
-  const schedule = () => {
-    if (!stopped && !document.hidden) timer = window.setTimeout(refresh, interval);
+  const flush = () => {
+    flushTimer = undefined;
+    if (stopped || !pending) return;
+    pending = false;
+    onData([...online], { ...live });
   };
 
-  const openLegacySocket = () => {
-    if (legacySocket && legacySocket.readyState < WebSocket.CLOSING) return;
-    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    legacySocket = new WebSocket(`${scheme}//${location.host}/api/clients`);
-    legacySocket.onopen = () => legacySocket?.send('get');
-    legacySocket.onmessage = (event) => {
+  const scheduleFlush = () => {
+    pending = true;
+    if (flushTimer === undefined) flushTimer = window.setTimeout(flush, flushInterval);
+  };
+
+  const wait = (ms: number) => new Promise<void>((resolve) => {
+    const timer = window.setTimeout(resolve, ms);
+    if (stopped) {
+      window.clearTimeout(timer);
+      resolve();
+    }
+  });
+
+  // 页面不可见时断开流，恢复可见再重连：后台标签页没有渲染需求，
+  // 也不必让服务端一直为它推送。
+  const waitUntilVisible = () => document.hidden
+    ? new Promise<void>((resolve) => {
+      const onVisible = () => {
+        if (document.hidden && !stopped) return;
+        document.removeEventListener('visibilitychange', onVisible);
+        resolve();
+      };
+      document.addEventListener('visibilitychange', onVisible);
+    })
+    : Promise.resolve();
+
+  const watch = async () => {
+    while (!stopped) {
+      await waitUntilVisible();
+      if (stopped) return;
+      controller = new AbortController();
       try {
-        const message = JSON.parse(event.data);
-        const payload = message?.data?.data ? message.data : message?.data;
-        if (payload?.data && !stopped) {
-          onData(payload.online ?? [], payload.data);
+        for await (const event of browser.watchAgentStatus(
+          { agentIds: [], afterEventId },
+          { signal: controller.signal, timeoutMs: 0 },
+        )) {
+          if (stopped) return;
+          const agent = event.agent;
+          if (!agent) continue;
+          // 记住事件位点，重连时不必从头重放。
+          afterEventId = agent.eventId || afterEventId;
+          if (agent.status === AgentStatus.ONLINE) online.add(agent.agentId);
+          else online.delete(agent.agentId);
+          live[agent.agentId] = liveStateOf(event.latestReport);
           onStatus(true);
+          scheduleFlush();
         }
-      } catch { /* ignore malformed legacy frames */ }
-    };
-    legacySocket.onerror = () => legacySocket?.close();
-    legacySocket.onclose = () => { legacySocket = undefined; };
-  };
-
-  const refresh = async () => {
-    if (stopped || running || document.hidden) return;
-    running = true;
-    controller = new AbortController();
-    try {
-      const response = await fetch('/api/rpc2', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'common:getNodesLatestStatus', id: ++requestId }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const payload = await response.json();
-      if (payload?.error) throw new Error(payload.error.message || 'RPC2 request failed');
-      const result = payload?.result ?? {};
-      const online: string[] = [];
-      const live: Record<string, LiveState> = {};
-
-      for (const [uuid, raw] of Object.entries(result as Record<string, Record<string, unknown>>)) {
-        const value = raw || {};
-        if (value.online) online.push(String(value.client || uuid));
-        live[uuid] = {
-          cpu: { usage: Number(value.cpu) || 0 },
-          ram: { used: Number(value.ram) || 0, total: Number(value.ram_total) || 0 },
-          swap: { used: Number(value.swap) || 0, total: Number(value.swap_total) || 0 },
-          disk: { used: Number(value.disk) || 0, total: Number(value.disk_total) || 0 },
-          network: {
-            up: Number(value.net_out) || 0,
-            down: Number(value.net_in) || 0,
-            totalUp: Number(value.net_total_out ?? value.net_total_up) || 0,
-            totalDown: Number(value.net_total_in ?? value.net_total_down) || 0,
-          },
-          load: {
-            load1: Number(value.load) || 0,
-            load5: Number(value.load5) || 0,
-            load15: Number(value.load15) || 0,
-          },
-          connections: {
-            tcp: Number(value.connections) || 0,
-            udp: Number(value.connections_udp) || 0,
-          },
-          uptime: Number(value.uptime) || 0,
-          process: Number(value.process) || 0,
-          ping: Object.fromEntries(
-            Object.entries((value.ping || {}) as Record<string, unknown>)
-              .map(([key, ping]) => [key, Number(ping)] as const)
-              .filter(([, ping]) => Number.isFinite(ping) && ping >= 0),
-          ),
-          updated_at: String(value.time || ''),
-        };
-      }
-
-      if (!stopped) {
-        legacySocket?.close();
-        legacySocket = undefined;
-        onData(online, live);
-        onStatus(true);
-      }
-    } catch (error) {
-      if (!stopped && !(error instanceof DOMException && error.name === 'AbortError')) {
+      } catch {
+        if (stopped) return;
         onStatus(false);
-        openLegacySocket();
       }
-    } finally {
-      running = false;
-      controller = undefined;
-      schedule();
+      if (stopped) return;
+      await wait(RECONNECT_DELAY_MS);
     }
   };
 
   const handleVisibility = () => {
-    if (timer) window.clearTimeout(timer);
-    timer = undefined;
-    if (!document.hidden) void refresh();
+    if (document.hidden) controller?.abort(new DOMException('Hidden', 'AbortError'));
   };
 
   document.addEventListener('visibilitychange', handleVisibility);
-  void refresh();
+  void watch();
+
   return () => {
     stopped = true;
-    if (timer) window.clearTimeout(timer);
-    controller?.abort();
-    legacySocket?.close();
+    if (flushTimer !== undefined) window.clearTimeout(flushTimer);
+    controller?.abort(new DOMException('Unmounted', 'AbortError'));
     document.removeEventListener('visibilitychange', handleVisibility);
   };
 }

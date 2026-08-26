@@ -7,7 +7,7 @@ import {
 import item351 from 'animal-island-ui/items/item-351.png';
 import item477 from 'animal-island-ui/items/item-477.png';
 import policeBadge from './assets/police-badge.png';
-import { connectLive, loadInitialData, loadNetworkLatencies, loadPingLatencies } from './api';
+import { connectLive, loadInitialData, loadNetworkLatencies, loadPingLatencies, loadSession } from './api';
 import type { NetworkLatency } from './api';
 import type { LiveState, NodeInfo, PublicSettings } from './types';
 
@@ -309,15 +309,9 @@ export default function App() {
   }, [brandTitle]);
 
   const openResidentLogin = async () => {
-    try {
-      const response = await fetch('/api/me', { credentials: 'same-origin' });
-      const account = await response.json() as { logged_in?: boolean };
-      if (response.ok && account.logged_in) {
-        window.location.href = '/admin/dashboard';
-        return;
-      }
-    } catch {
-      // 登录弹窗仍可处理临时的账户状态接口故障。
+    if ((await loadSession()).loggedIn) {
+      window.location.href = '/admin/dashboard';
+      return;
     }
     if (settings.oauth_enable && settings.disable_password_login) {
       window.location.href = '/api/oauth';

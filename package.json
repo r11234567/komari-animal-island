@@ -2,7 +2,7 @@
   "name": "komari-animal-island-theme",
   "description": "使用 Animal Island UI 构建的温暖游戏风简单的Komari 监控主题",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.8",
   "license": "CC-BY-NC-4.0",
   "type": "module",
   "scripts": {
@@ -12,6 +12,10 @@
     "package": "npm run build && node scripts/package-zip.mjs"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.10.0",
+    "@connectrpc/connect": "^2.1.1",
+    "@connectrpc/connect-web": "^2.1.1",
+    "@komari/proto": "github:r11234567/komari-proto#v0.1.28",
     "animal-island-ui": "^1.6.0",
     "classnames": "^2.5.1",
     "react": "^18.3.1",
