@@ -16,6 +16,9 @@ type Appearance = 'light' | 'dark';
 type SortMode = 'name-asc' | 'name-desc' | 'cpu-desc' | 'memory-desc' | 'network-desc';
 type LoginValues = { username?: string; password?: string; twoFactor?: string };
 
+const PASSKEY_REDIRECT_KEY = 'animal-island:passkey-login-redirect';
+const PASSKEY_REDIRECT_MAX_AGE_MS = 60_000;
+
 const REGION_NAMES: Record<string, string> = {
   CN: '中国大陆', HK: '中国香港', MO: '中国澳门', TW: '中国台湾',
   SG: '新加坡', US: '美国', JP: '日本', KR: '韩国', DE: '德国',
@@ -308,6 +311,40 @@ export default function App() {
     document.title = brandTitle;
   }, [brandTitle]);
 
+  useEffect(() => {
+    const markPasskeyLogin = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest('.km-passkey-login')) return;
+      try {
+        sessionStorage.setItem(PASSKEY_REDIRECT_KEY, String(Date.now()));
+      } catch {
+        // Storage may be unavailable in privacy-restricted browser contexts.
+      }
+    };
+    document.addEventListener('click', markPasskeyLogin, true);
+    return () => document.removeEventListener('click', markPasskeyLogin, true);
+  }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    let shouldRedirect = false;
+    try {
+      const markedAt = Number(sessionStorage.getItem(PASSKEY_REDIRECT_KEY));
+      if (Number.isFinite(markedAt) && Date.now() - markedAt <= PASSKEY_REDIRECT_MAX_AGE_MS) {
+        shouldRedirect = true;
+      }
+      if (shouldRedirect) sessionStorage.removeItem(PASSKEY_REDIRECT_KEY);
+    } catch {
+      return;
+    }
+    if (!shouldRedirect) return;
+    void loadSession().then((session) => {
+      if (session.loggedIn && !window.location.pathname.startsWith('/admin')) {
+        window.location.assign('/admin/dashboard');
+      }
+    });
+  }, [loading]);
+
   const openResidentLogin = async () => {
     if ((await loadSession()).loggedIn) {
       window.location.href = '/admin/dashboard';
@@ -458,10 +495,11 @@ export default function App() {
         </div>}
       </Modal>
 
-      <Modal open={loginOpen} width="min(460px, calc(100vw - 48px))" className="login-modal" title="岛民身份验证" onClose={() => !loginLoading && setLoginOpen(false)} footer={null} typewriter={false}>
+      <Modal open={loginOpen} width="min(460px, calc(100vw - 48px))" className="login-modal km-login-dialog" title="岛民身份验证" onClose={() => !loginLoading && setLoginOpen(false)} footer={null} typewriter={false}>
         <div className="login-intro"><Typewriter speed={42} trigger={loginOpen}>
           <span>你好，欢迎来到 <strong className="login-brand-highlight">{brandTitle}</strong>！今天的天气真不错呢～</span>
         </Typewriter></div>
+        <div className="km-login-form">
         {!settings.disable_password_login && <Form layout="vertical" onFinish={(values) => login(values as LoginValues)} requiredMark={false}>
           <FormItem label="岛民账号" name="username" rules={[{ required: true, message: '请输入岛民账号' }]}><Input autoComplete="username" placeholder="请输入账号" shadow disabled={loginLoading} /></FormItem>
           <FormItem label="通行密码" name="password" rules={[{ required: true, message: '请输入通行密码' }]}><Input type="password" autoComplete="current-password" placeholder="请输入密码" shadow disabled={loginLoading} /></FormItem>
@@ -474,6 +512,7 @@ export default function App() {
             {settings.oauth_provider?.toLowerCase() === 'github' ? 'Github登录' : `${settings.oauth_provider && settings.oauth_provider !== 'generic' ? settings.oauth_provider : 'OAuth'}登录`}
           </Button>
         </div>}
+        </div>
       </Modal>
 
       <Drawer open={drawer} title="岛屿显示设置" onClose={() => setDrawer(false)} footer={null}>
@@ -486,4 +525,3 @@ export default function App() {
     </Cursor>
   );
 }
-
