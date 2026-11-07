@@ -9,6 +9,7 @@ import type { AgentReport } from '@komari/proto/komari/report/v1/report_pb';
 import { browser, metrics } from './connect';
 import { mockLive, mockNodes, mockSettings } from './mock';
 import type { LiveState, NodeInfo, PublicSettings } from './types';
+import { getStoredAuthToken, isJwtValid, parseJwt } from './auth';
 
 const PING_WINDOW_HOURS = 1;
 const RECONNECT_DELAY_MS = 2000;
@@ -115,17 +116,68 @@ export async function loadInitialData() {
 /**
  * 当前访客的登录态。
  *
- * 登录与 OAuth 本身仍走 REST：前者需要服务端写下会话 Cookie，后者是浏览器跳转，
- * 都不是 RPC 能表达的形态。
+ * 优先检查 Connect 客户端会话；
+ * 随后向 /api/me 发起校验（兼容 Session Cookie 与 Bearer Token）；
+ * 若存在未过期的客户端 JWT，也能直接识别出登录身份。
  */
-export async function loadSession() {
+export async function loadSession(): Promise<{ loggedIn: boolean; username: string }> {
+  // 1. 先检索本地存储是否有 Token / JWT
+  const token = getStoredAuthToken();
+  let jwtUsername = '';
+  let tokenValid = false;
+  if (token) {
+    if (isJwtValid(token)) {
+      tokenValid = true;
+      const payload = parseJwt(token);
+      jwtUsername = ((payload?.username || payload?.sub || payload?.user || payload?.name || '') as string).trim();
+    }
+  }
+
+  // 2. 优先尝试 /api/me 端点（附带凭据和 Authorization 头）
+  try {
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    const response = await fetch('/api/me', {
+      headers,
+      credentials: 'same-origin',
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data && (data.logged_in === true || data.loggedIn === true)) {
+        return {
+          loggedIn: true,
+          username: (data.username && data.username !== 'Guest' ? data.username : (jwtUsername || '岛民')),
+        };
+      }
+    }
+  } catch {
+    // 忽略异常，降级检查
+  }
+
+  // 3. 尝试 Connect browser.getSession({})
   try {
     const session = await browser.getSession({});
-    return { loggedIn: session.loggedIn, username: session.username };
+    if (session.loggedIn) {
+      return {
+        loggedIn: true,
+        username: (session.username && session.username !== 'Guest' ? session.username : (jwtUsername || '岛民')),
+      };
+    }
   } catch {
-    // 拿不到会话状态时按未登录处理，登录弹窗仍可用。
-    return { loggedIn: false, username: '' };
+    // 忽略异常
   }
+
+  // 4. 若接口未返回但客户端持有未过期的有效 JWT
+  if (tokenValid) {
+    return {
+      loggedIn: true,
+      username: jwtUsername || '岛民',
+    };
+  }
+
+  return { loggedIn: false, username: '' };
 }
 
 export type NetworkLatency = { taskId: number; name: string; latency: number | null };

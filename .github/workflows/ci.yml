@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify theme contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # 站点描述是字面替换：dist/index.html 里必须留着这句原文
+          if ! grep -qF 'A simple server monitor tool.' dist/index.html; then
+            echo "::error::dist/index.html 缺少站点描述锚点 'A simple server monitor tool.'"
+            exit 1
+          fi
+
+          # 站点语言只识别 lang="en"、lang='en' 或根元素完全不带 lang 三种写法
+          if ! grep -qE '<html([^>]*\slang=["'"'"']en["'"'"'][^>]*)?>' dist/index.html; then
+            echo "::error::dist/index.html 的 <html> 需为 lang=\"en\" 或不带 lang，否则站点语言设置会被忽略"
+            exit 1
+          fi
+
+          # 自定义 head/body 与主题热重载脚本都靠这两个闭合标签定位
+          for tag in '</head>' '</body>'; do
+            if ! grep -qF "$tag" dist/index.html; then
+              echo "::error::dist/index.html 缺少 $tag，自定义注入会失效"
+              exit 1
+            fi
+          done
+
+      - name: Package
+        run: node scripts/package-zip.mjs
+
+      - name: Verify package output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f theme-package/*.zip
+          test -f theme-package/*.zip.sha256
+          echo "Package built and verified successfully."

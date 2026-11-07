@@ -3,6 +3,8 @@ import type { LiveState, NodeInfo, PublicSettings } from './types';
 export const mockSettings: PublicSettings = {
   sitename: '狸克的服务器岛',
   description: '一座安静运行、随时可见的服务器小岛',
+  oauth_enable: true,
+  oauth_provider: 'github',
   theme_settings: { show_dashboard: true, show_footer: true, show_latency: false },
 };
 

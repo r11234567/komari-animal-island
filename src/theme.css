@@ -24,6 +24,7 @@
 }
 
 * { box-sizing: border-box; }
+#app-boot-splash { position: fixed; inset: 0; z-index: 10000; background: #000; }
 .animal-cursor--force, .animal-cursor--force * { cursor: url('../files/cursor-icon.1ea93a65.png') 4 0, default !important; }
 html { scroll-behavior: smooth; background: var(--animal-bg, var(--animal-bg-color)); }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--animal-bg, var(--animal-bg-color)); color: var(--animal-text-color); font-family: var(--animal-font-family); font-weight: 500; }
@@ -53,6 +54,35 @@ button, input { font: inherit; }
 .brand-copy > span { color: #365f50; font-size: 14px; font-weight: 800; line-height: 20px; max-width: 460px; padding-left: 5px; overflow-wrap: anywhere; }
 :root[data-appearance='dark'] .brand-copy > span { color: #d9eadb; }
 .header-actions { gap: 8px; }
+
+/* 顶栏“岛民”按钮与登录态联动样式 */
+.resident-btn {
+  position: relative;
+  transition: all 0.2s ease;
+}
+.resident-btn--logged-in {
+  box-shadow: 0 3px 0 color-mix(in srgb, var(--animal-success-color, #78c282) 40%, transparent) !important;
+}
+.resident-btn-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.resident-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #39d98a;
+  box-shadow: 0 0 0 2px rgba(57, 217, 138, 0.35);
+  animation: residentPulse 2s infinite cubic-bezier(0.4, 0, 0.6, 1);
+  display: inline-block;
+  flex-shrink: 0;
+}
+@keyframes residentPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
 .km-main { width: min(var(--page-max), calc(100% - 40px)); margin: 0 auto; padding: 36px 0 72px; flex: 1; }
 .dashboard-section, .server-section { display: grid; gap: 22px; }
 .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
@@ -147,18 +177,248 @@ button, input { font: inherit; }
 .detail-billing > span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 800; }
 .detail-billing > small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; opacity: .75; }
 .detail-billing > div:last-child { max-width: 100%; }
+
+/* 登录模态框与多方式 Tabs 布局 */
 .login-modal { color: var(--animal-detail-text); }
 .login-modal > div:last-child { padding: 48px 54px 38px; }
 .login-modal [class*='body'] { width: 100%; align-items: stretch; }
-.login-modal form { width: min(320px, 100%); margin: 0 auto; }
+.login-modal form { width: min(340px, 100%); margin: 0 auto; }
 .login-modal form [class*='form-item'], .login-modal form [class*='wrapper'] { width: 100%; }
 .login-submit-item { margin-top: 16px; }
-.oauth-login { width: min(320px, 100%); margin: 18px auto 0; }
-.oauth-login-only { margin-top: 4px; }
-.oauth-login > button { min-height: var(--animal-height-base); }
-.login-intro { width: 100%; min-height: 54px; margin: 0 0 20px; color: var(--animal-detail-text); text-align: left; font-size: 16px; line-height: 1.7; }
+
+.login-intro { width: 100%; min-height: 54px; margin: 0 0 16px; color: var(--animal-detail-text); text-align: left; font-size: 15px; line-height: 1.6; }
 .login-brand-highlight { color: var(--animal-warning-color); font-size: inherit; font-weight: 900; text-shadow: 0 2px 0 rgba(255, 255, 255, .65); }
 .login-error { margin: -4px 0 16px; color: var(--animal-error-color); font-weight: 800; }
+
+.km-login-form { width: 100%; }
+.login-tabs { width: 100%; }
+.login-tabs [class*='tabs-nav'],
+.login-tabs [class*='nav-list'],
+.login-tabs [role='tablist'] {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 22px;
+  flex-wrap: nowrap;
+}
+.login-tabs [class*='tabs__item'],
+.login-tabs [class*='nav-item'],
+.login-tabs [role='tab'] {
+  white-space: nowrap !important;
+  padding: 6px 14px !important;
+  font-size: 14px !important;
+}
+
+.login-tab-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: min(340px, 100%);
+  margin: 0 auto;
+}
+
+.two-factor-step-panel {
+  align-items: center;
+  text-align: center;
+  padding: 8px 12px 18px;
+}
+
+.two-factor-target-tag {
+  display: inline-block;
+  margin: 4px 0;
+  padding: 2px 10px;
+  background: color-mix(in srgb, #78c282 18%, transparent);
+  color: #24583b;
+  border-radius: 9999px;
+  font-weight: 800;
+  font-size: 13px;
+  border: 1px solid rgba(120, 194, 130, 0.4);
+}
+:root[data-appearance='dark'] .two-factor-target-tag {
+  background: color-mix(in srgb, #78c282 25%, transparent);
+  color: #a4e5af;
+  border-color: rgba(120, 194, 130, 0.35);
+}
+
+.two-factor-hint {
+  display: block;
+  font-size: 12px;
+  color: #8b8070;
+  margin-top: 2px;
+}
+:root[data-appearance='dark'] .two-factor-hint {
+  color: #8a9ba0;
+}
+
+.two-factor-input-wrapper {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.two-factor-input-wrapper input {
+  text-align: center;
+  letter-spacing: 6px;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.two-factor-input--notification input {
+  text-transform: uppercase;
+  letter-spacing: 5px !important;
+  font-size: 19px !important;
+  font-weight: 800 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+}
+
+.two-factor-input--totp input {
+  letter-spacing: 8px !important;
+  font-size: 21px !important;
+  font-weight: 800 !important;
+}
+
+.two-factor-resend-bar {
+  margin-top: -6px;
+  margin-bottom: 14px;
+}
+
+.two-factor-resend-btn {
+  background: none;
+  border: none;
+  color: #2b7a4b;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: opacity 0.15s ease;
+  padding: 2px 6px;
+}
+.two-factor-resend-btn:hover:not(:disabled) {
+  opacity: 0.8;
+}
+.two-factor-resend-btn:disabled {
+  color: #8b8070;
+  text-decoration: none;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+:root[data-appearance='dark'] .two-factor-resend-btn {
+  color: #78c282;
+}
+:root[data-appearance='dark'] .two-factor-resend-btn:disabled {
+  color: #7a8890;
+}
+
+.two-factor-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.login-method-card {
+  align-items: center;
+  text-align: center;
+  padding: 22px 18px 24px;
+  border-radius: 24px;
+  background: color-mix(in srgb, #fff 55%, transparent);
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.04), 0 4px 14px rgba(91, 75, 48, 0.06);
+  border: 2px dashed rgba(139, 116, 77, 0.2);
+}
+:root[data-appearance='dark'] .login-method-card {
+  background: color-mix(in srgb, #1a2c3a 65%, transparent);
+  border-color: rgba(170, 187, 190, 0.2);
+}
+
+.login-method-badge {
+  display: grid;
+  place-items: center;
+  width: 68px;
+  height: 68px;
+  margin-bottom: 12px;
+  border-radius: 50%;
+  background: #fbf5e2;
+  box-shadow: 0 4px 14px rgba(91, 75, 48, 0.12);
+  border: 2px solid #ecd8ab;
+}
+:root[data-appearance='dark'] .login-method-badge {
+  background: #253948;
+  border-color: #3b576d;
+}
+
+.login-method-heading {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 900;
+  color: var(--animal-detail-text);
+}
+.login-method-text {
+  margin: 0 0 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  opacity: 0.85;
+  color: var(--animal-detail-text);
+}
+.login-method-disabled {
+  text-align: center;
+  padding: 24px 16px;
+  font-size: 14px;
+  color: var(--animal-node-muted);
+}
+.passkey-btn-leaf {
+  font-size: 17px;
+  line-height: 1;
+}
+
+/* 通行密钥登录按钮 - 原生及插件注入均完美适配动物森友会视觉风格 */
+.km-passkey-login {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 24px;
+  border-radius: 9999px;
+  border: 2px solid #5aa364;
+  background: #78c282;
+  color: #fff;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 0 #4a8f53, 0 8px 16px rgba(40, 95, 82, 0.16);
+  transition: transform 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+              box-shadow 0.12s cubic-bezier(0.4, 0, 0.2, 1),
+              background 0.15s ease;
+  user-select: none;
+  text-decoration: none;
+  outline: none;
+}
+.km-passkey-login:hover {
+  background: #88cf91;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 0 #4a8f53, 0 10px 20px rgba(40, 95, 82, 0.22);
+}
+.km-passkey-login:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 #4a8f53, 0 4px 8px rgba(40, 95, 82, 0.12);
+}
+.km-passkey-login:focus-visible {
+  outline: 3px solid #ffcc00;
+  outline-offset: 3px;
+}
+.km-passkey-login:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+/* 若外部 passkey 插件向 .km-login-form 动态挂载了多余按钮，隐藏根级冗余按钮 */
+.km-login-form > button.km-passkey-login:not(.animal-passkey-trigger) {
+  display: none !important;
+}
 
 @media (max-width: 1000px) {
   .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -195,4 +455,3 @@ button, input { font: inherit; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
 }
-
