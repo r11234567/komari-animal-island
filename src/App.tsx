@@ -929,30 +929,68 @@ export default function App() {
         )}
       </div>
 
-      <Modal open={Boolean(selected)} width="min(680px, calc(100vw - 64px))" className="detail-modal" maskStyle={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }} title={selected && <div className="detail-header"><div className="detail-heading-copy"><strong>{selected.name}</strong><span>{selected.os || '未知系统版本'}</span></div><div className="detail-tags"><Tag color="app-green">{online.includes(selected.uuid) || demo ? '在线' : '离线'}</Tag><Tag color="app-blue">{regionLabel(selected.region)}</Tag><Tag color="app-blue">{selected.virtualization || '未知虚拟化'}</Tag><Tag color="app-blue">{selected.arch || '未知架构'}</Tag>{currentGpuStats.deviceName && <Tag color="app-yellow">{currentGpuStats.deviceName}</Tag>}</div></div>} onClose={() => setSelected(null)} footer={<Button type="primary" onClick={() => setSelected(null)}>回到岛屿</Button>} typewriter={false}>
-        {selected && <div className="details">
-          <div className="detail-copy">
-            {selected.public_remark && <p>{selected.public_remark}</p>}
-            <div className="detail-info-grid">
-              <Card className={`detail-stat-card${hasBilling(selected) ? '' : ' detail-stat-card--full'}`} pattern="app-teal">
-                <div className="detail-grid">{showLatency && pingTasksActive && (liveLatency(current) ?? latencies[selected.uuid]) != null && <><span>延迟</span><strong>{liveLatency(current) ?? latencies[selected.uuid]} ms</strong></>}<span>负载</span><strong>{current?.load?.load1?.toFixed(2) || '—'}</strong><span>进程</span><strong>{current?.process ?? '—'}</strong><span>TCP / UDP</span><strong>{current?.connections?.tcp ?? '—'} / {current?.connections?.udp ?? '—'}</strong><span>运行时间</span><strong>{formatUptime(current?.uptime)}</strong>{currentGpuStats.temperature !== undefined && <><span>GPU 温度</span><strong>{currentGpuStats.temperature} °C</strong></>}</div>
-              </Card>
-              {hasBilling(selected) && <Card className="detail-stat-card detail-billing" pattern="app-teal">
-                <strong>{billingCycleLabel(Number(selected.billing_cycle))} {formatMoney(Number(selected.price))} {selected.currency || '—'}</strong>
-                <small>{renewalLabel(selected)}</small>
-                <span>剩余价值 {selected.currency || '—'}</span>
-                <Wallet value={remainingValue(selected)} size="small" />
-              </Card>}
+      <Modal
+        open={Boolean(selected)}
+        width="min(720px, calc(100vw - 48px))"
+        className="detail-modal"
+        maskStyle={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}
+        title={selected && (
+          <div className="detail-header">
+            <div className="detail-heading-copy">
+              <strong>{selected.name}</strong>
+              <span>{selected.os || '未知系统版本'}</span>
+            </div>
+            <div className="detail-tags">
+              <Tag color="app-green">{online.includes(selected.uuid) || demo ? '在线' : '离线'}</Tag>
+              <Tag color="app-blue">{regionLabel(selected.region)}</Tag>
+              <Tag color="app-blue">{selected.virtualization || '未知虚拟化'}</Tag>
+              <Tag color="app-blue">{selected.arch || '未知架构'}</Tag>
+              {currentGpuStats.deviceName && <Tag color="app-yellow">{currentGpuStats.deviceName}</Tag>}
             </div>
           </div>
-          <div className="detail-metrics">
-            <Metric label="CPU" used={current?.cpu?.usage} total={100} />
-            <Metric label="内存" used={current?.ram?.used} total={current?.ram?.total || selected.mem_total} />
-            {currentGpuStats.hasGpu && <Metric label="GPU" used={currentGpuStats.usage} total={100} />}
-            {currentGpuStats.hasGpuMem && <Metric label="显存" used={currentGpuStats.memoryUsed} total={currentGpuStats.memoryTotal} />}
-            <Metric label="硬盘" used={current?.disk?.used} total={current?.disk?.total || selected.disk_total} />
+        )}
+        onClose={() => setSelected(null)}
+        footer={<Button type="primary" onClick={() => setSelected(null)}>回到岛屿</Button>}
+        typewriter={false}
+      >
+        {selected && (
+          <div className="details">
+            <div className="detail-copy">
+              {selected.public_remark && <p>{selected.public_remark}</p>}
+              <div className="detail-info-grid">
+                <Card className={`detail-stat-card${hasBilling(selected) ? '' : ' detail-stat-card--full'}`} pattern="app-teal">
+                  <div className="detail-grid">
+                    {showLatency && pingTasksActive && (liveLatency(current) ?? latencies[selected.uuid]) != null && (
+                      <div className="detail-grid-item"><span>延迟</span><strong>{liveLatency(current) ?? latencies[selected.uuid]} ms</strong></div>
+                    )}
+                    <div className="detail-grid-item"><span>负载</span><strong>{current?.load?.load1?.toFixed(2) || '—'}</strong></div>
+                    <div className="detail-grid-item"><span>进程</span><strong>{current?.process ?? '—'}</strong></div>
+                    <div className="detail-grid-item"><span>TCP / UDP</span><strong>{current?.connections?.tcp ?? '—'} / {current?.connections?.udp ?? '—'}</strong></div>
+                    <div className="detail-grid-item"><span>运行时间</span><strong>{formatUptime(current?.uptime)}</strong></div>
+                    {currentGpuStats.temperature !== undefined && (
+                      <div className="detail-grid-item"><span>GPU 温度</span><strong>{currentGpuStats.temperature} °C</strong></div>
+                    )}
+                  </div>
+                </Card>
+                {hasBilling(selected) && (
+                  <Card className="detail-stat-card detail-billing" pattern="app-teal">
+                    <strong>{billingCycleLabel(Number(selected.billing_cycle))} {formatMoney(Number(selected.price))} {selected.currency || '—'}</strong>
+                    <small>{renewalLabel(selected)}</small>
+                    <span>剩余价值 {selected.currency || '—'}</span>
+                    <Wallet value={remainingValue(selected)} size="small" />
+                  </Card>
+                )}
+              </div>
+            </div>
+            <div className="detail-metrics">
+              <Metric label="CPU" used={current?.cpu?.usage} total={100} />
+              <Metric label="内存" used={current?.ram?.used} total={current?.ram?.total || selected.mem_total} />
+              {currentGpuStats.hasGpu && <Metric label="GPU" used={currentGpuStats.usage} total={100} />}
+              {currentGpuStats.hasGpuMem && <Metric label="显存" used={currentGpuStats.memoryUsed} total={currentGpuStats.memoryTotal} />}
+              <Metric label="硬盘" used={current?.disk?.used} total={current?.disk?.total || selected.disk_total} />
+            </div>
           </div>
-        </div>}
+        )}
       </Modal>
 
       <Modal
