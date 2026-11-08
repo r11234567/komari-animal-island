@@ -18,6 +18,24 @@ export interface NodeInfo {
   auto_renewal?: boolean;
   currency?: string;
   expired_at?: string | null;
+  traffic_limit?: number;
+  traffic_limit_type?: 'sum' | 'max' | string;
+  traffic_reset_day?: number;
+  traffic_reset_time?: string;
+  traffic_reset_timezone?: string;
+  traffic_next_reset?: string;
+  traffic_accounting?: {
+    resetDay?: number;
+    resetTime?: string;
+    resetTimezone?: string;
+    cycleStart?: string;
+    nextReset?: string;
+    usedUpBytes?: number;
+    usedDownBytes?: number;
+    billableBytes?: number;
+    countingType?: string;
+    cycleAvailable?: boolean;
+  };
 }
 
 export interface GpuDevice {

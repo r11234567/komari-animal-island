@@ -28,6 +28,7 @@ const publicSettingsOf = (info: GetPublicInfoResponse): PublicSettings => ({
 
 const nodeInfoOf = (agent: AgentSummary): NodeInfo => {
   const basic = agent.basicInfo;
+  const accounting = agent.trafficAccounting;
   return {
     uuid: agent.agentId,
     name: agent.name,
@@ -50,6 +51,24 @@ const nodeInfoOf = (agent: AgentSummary): NodeInfo => {
     auto_renewal: basic?.autoRenewal,
     currency: basic?.currency,
     expired_at: basic?.expiresAt ? timestampDate(basic.expiresAt).toISOString() : null,
+    traffic_limit: asNumber(basic?.trafficLimitBytes),
+    traffic_limit_type: basic?.trafficLimitType,
+    traffic_reset_day: accounting?.resetDay ?? undefined,
+    traffic_reset_time: accounting?.resetTime || undefined,
+    traffic_reset_timezone: accounting?.resetTimezone || undefined,
+    traffic_next_reset: accounting?.nextReset ? timestampDate(accounting.nextReset).toISOString() : undefined,
+    traffic_accounting: accounting ? {
+      resetDay: accounting.resetDay ?? undefined,
+      resetTime: accounting.resetTime,
+      resetTimezone: accounting.resetTimezone,
+      cycleStart: accounting.cycleStart ? timestampDate(accounting.cycleStart).toISOString() : undefined,
+      nextReset: accounting.nextReset ? timestampDate(accounting.nextReset).toISOString() : undefined,
+      usedUpBytes: asNumber(accounting.usedUpBytes),
+      usedDownBytes: asNumber(accounting.usedDownBytes),
+      billableBytes: asNumber(accounting.billableBytes),
+      countingType: accounting.countingType,
+      cycleAvailable: accounting.cycleAvailable,
+    } : undefined,
   };
 };
 

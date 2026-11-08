@@ -102,6 +102,82 @@ const formatUptime = (seconds = 0) => {
   return `${days}天 ${hours}时 ${minutes}分`;
 };
 
+const formatTrafficResetSchedule = (day?: number, time = '00:00:00', timezone = 'Asia/Shanghai') => {
+  if (day == null) return '';
+  if (day === 0) return '不设置月度重置';
+  const clock = time.length === 8 && time.endsWith(':00') ? time.slice(0, 5) : time || '00:00';
+  return `每月 ${day} 日 ${clock}${timezone ? ` (${timezone})` : ''}`;
+};
+
+const formatTrafficResetRemaining = (instant?: string, now = new Date()) => {
+  if (!instant) return '';
+  const target = new Date(instant);
+  const diffMs = target.getTime() - now.getTime();
+  if (isNaN(diffMs) || diffMs <= 0) return '即将重置';
+  const days = Math.floor(diffMs / (24 * 3600 * 1000));
+  const hours = Math.floor((diffMs % (24 * 3600 * 1000)) / (3600 * 1000));
+  const minutes = Math.floor((diffMs % (3600 * 1000)) / (60 * 1000));
+  if (days > 0) return `${days} 天 ${hours} 小时`;
+  if (hours > 0) return `${hours} 小时 ${minutes} 分钟`;
+  if (minutes > 0) return `${minutes} 分钟`;
+  return '即将重置';
+};
+
+interface TrafficQuotaInfo {
+  used: number;
+  limit: number;
+  pct: number;
+  mode: 'sum' | 'max';
+  scheduleText: string;
+  remainingText: string;
+  badgeText: string;
+  nextReset?: string;
+}
+
+const getTrafficQuotaInfo = (node: NodeInfo, live?: LiveState): TrafficQuotaInfo | undefined => {
+  const limit = node.traffic_limit ?? 0;
+  if (!Number.isFinite(limit) || limit <= 0) return undefined;
+  const up = live?.network?.totalUp ?? 0;
+  const down = live?.network?.totalDown ?? 0;
+  const mode = node.traffic_limit_type === 'sum' ? 'sum' : 'max';
+  const used = mode === 'sum' ? up + down : Math.max(up, down);
+  const pct = Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
+
+  const day = node.traffic_reset_day ?? node.traffic_accounting?.resetDay;
+  const time = node.traffic_reset_time || node.traffic_accounting?.resetTime || '00:00:00';
+  const timezone = node.traffic_reset_timezone || node.traffic_accounting?.resetTimezone || 'Asia/Shanghai';
+  let nextReset = node.traffic_next_reset || node.traffic_accounting?.nextReset;
+
+  if (!nextReset && day && day >= 1 && day <= 31) {
+    try {
+      const parts = time.split(':').map((s) => Number(s) || 0);
+      const now = new Date();
+      let candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), day, parts[0] || 0, parts[1] || 0, parts[2] || 0));
+      if (candidate.getTime() <= now.getTime()) {
+        candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, day, parts[0] || 0, parts[1] || 0, parts[2] || 0));
+      }
+      nextReset = candidate.toISOString();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const scheduleText = formatTrafficResetSchedule(day, time, timezone);
+  const remainingText = formatTrafficResetRemaining(nextReset);
+  const badgeText = remainingText ? `还有 ${remainingText}` : day ? `${day} 日重置` : '';
+
+  return {
+    used,
+    limit,
+    pct,
+    mode,
+    scheduleText,
+    remainingText,
+    badgeText,
+    nextReset,
+  };
+};
+
 interface GpuStats {
   hasGpu: boolean;
   hasGpuMem: boolean;
@@ -208,6 +284,7 @@ function NodeCard({ node, live, online, latency, networkLatencies = [], showLate
 }) {
   const displayedLatency = liveLatency(live) ?? latency;
   const gpuStats = getGpuStats(node, live);
+  const trafficQuota = getTrafficQuotaInfo(node, live);
 
   return (
     <Card className="km-node-card" color={online ? 'default' : 'brown'} pattern={online ? 'app-teal' : 'none'}>
@@ -234,6 +311,27 @@ function NodeCard({ node, live, online, latency, networkLatencies = [], showLate
       {gpuStats.hasGpuMem && <Metric label="显存" used={gpuStats.memoryUsed} total={gpuStats.memoryTotal} />}
       <Metric label="硬盘" used={live?.disk?.used} total={live?.disk?.total || node.disk_total} />
       <Metric label="SWAP" used={live?.swap?.used} total={live?.swap?.total || node.swap_total} />
+      {trafficQuota && (
+        <div className="traffic-quota-box" style={{ marginTop: 8, marginBottom: 8, padding: '8px 10px', background: 'rgba(255,255,255,0.65)', borderRadius: 8, border: '1px dashed #d1cfc7' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4, fontSize: 12 }}>
+            <span style={{ fontWeight: 600, color: '#433d3c' }}>
+              流量配额 ({trafficQuota.mode === 'sum' ? '求和' : '取最大'})
+            </span>
+            {trafficQuota.badgeText && (
+              <Tag size="small" color="app-blue" variant="soft">
+                ⟳ {trafficQuota.badgeText}
+              </Tag>
+            )}
+          </div>
+          <Metric label="已用" used={trafficQuota.used} total={trafficQuota.limit} />
+          {trafficQuota.scheduleText && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#777', marginTop: 4 }}>
+              <span>重置: {trafficQuota.scheduleText}</span>
+              {trafficQuota.remainingText && <span style={{ color: '#2b7de9', fontWeight: 500 }}>{trafficQuota.remainingText}后重置</span>}
+            </div>
+          )}
+        </div>
+      )}
       <div className={`network-grid ${networkLatencies.length ? 'has-network-latency' : ''}`}>
         <div><strong>实时网络</strong><span>下载 {formatSpeed(live?.network?.down)}</span><span>上传 {formatSpeed(live?.network?.up)}</span></div>
         <div><strong>总流量</strong><span>接收 {formatBytes(live?.network?.totalDown)}</span><span>发送 {formatBytes(live?.network?.totalUp)}</span></div>
@@ -250,6 +348,7 @@ function NodeListRow({ node, live, online, networkLatencies = [], onDetails }: {
   node: NodeInfo; live?: LiveState; online: boolean; networkLatencies?: NetworkLatency[]; onDetails: () => void;
 }) {
   const gpuStats = getGpuStats(node, live);
+  const trafficQuota = getTrafficQuotaInfo(node, live);
   const extraStatsCount = (gpuStats.hasGpu ? 1 : 0) + (gpuStats.hasGpuMem ? 1 : 0);
   const rowClasses = [
     'km-node-row',
@@ -275,6 +374,13 @@ function NodeListRow({ node, live, online, networkLatencies = [], onDetails }: {
       {gpuStats.hasGpuMem && <div className="row-stat"><span>显存</span><strong>{formatPercent(percent(gpuStats.memoryUsed, gpuStats.memoryTotal))}</strong></div>}
       <div className="row-stat"><span>硬盘</span><strong>{formatPercent(percent(live?.disk?.used, live?.disk?.total || node.disk_total))}</strong></div>
       <div className="row-stat row-network"><span>网络</span><strong>↓ {formatSpeed(live?.network?.down)} / ↑ {formatSpeed(live?.network?.up)}</strong></div>
+      {trafficQuota && (
+        <div className="row-stat">
+          <span>配额</span>
+          <strong>{trafficQuota.pct}% ({formatBytes(trafficQuota.used)} / {formatBytes(trafficQuota.limit)})</strong>
+          {trafficQuota.badgeText && <small style={{ fontSize: 10, color: '#2b7de9', display: 'block' }}>⟳ {trafficQuota.badgeText}</small>}
+        </div>
+      )}
       {networkLatencies.length > 0 && <div className="row-network-latency"><span>三网延迟</span><div>{networkLatencies.map((item) => <Tag key={item.taskId} size="small" color={item.latency == null ? 'brown' : latencyColor(item.latency)} variant="soft">{item.name} {item.latency == null ? '—' : item.latency} ms</Tag>)}</div></div>}
       <Tag size="small" color={online ? 'app-green' : 'brown'}>{online ? '在线' : '离线'}</Tag>
       <Button type="dashed" size="small" icon={<Icon name="icon-map" size={18} />} onClick={onDetails}>详情</Button>
@@ -988,6 +1094,24 @@ export default function App() {
               {currentGpuStats.hasGpu && <Metric label="GPU" used={currentGpuStats.usage} total={100} />}
               {currentGpuStats.hasGpuMem && <Metric label="显存" used={currentGpuStats.memoryUsed} total={currentGpuStats.memoryTotal} />}
               <Metric label="硬盘" used={current?.disk?.used} total={current?.disk?.total || selected.disk_total} />
+              {selected && getTrafficQuotaInfo(selected, current) && (() => {
+                const q = getTrafficQuotaInfo(selected, current)!;
+                return (
+                  <div className="detail-traffic-card" style={{ marginTop: 12, padding: '10px 14px', background: 'rgba(255,255,255,0.7)', borderRadius: 10, border: '1px solid #d1cfc7' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <strong style={{ fontSize: 13, color: '#433d3c' }}>流量配额 ({q.mode === 'sum' ? '求和' : '取最大'})</strong>
+                      {q.badgeText && <Tag color="app-blue" size="small" variant="soft">⟳ {q.badgeText}</Tag>}
+                    </div>
+                    <Metric label="已用配额" used={q.used} total={q.limit} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 12, color: '#666', marginTop: 6 }}>
+                      {q.scheduleText && <div>重置周期：{q.scheduleText}</div>}
+                      {q.nextReset && (
+                        <div>下次重置：{q.nextReset.slice(0, 16).replace('T', ' ')}{q.remainingText ? `（还有 ${q.remainingText}）` : ''}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
