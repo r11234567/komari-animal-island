@@ -908,7 +908,7 @@ export default function App() {
                           <Input
                             inputMode={twoFactorMode === 'otp' ? 'text' : 'numeric'}
                             autoComplete="one-time-code"
-                            placeholder={twoFactorMode === 'otp' ? '8位字母数字组合' : '000000'}
+                            placeholder={twoFactorMode === 'otp' ? 'XXXXXXXX' : '000000'}
                             maxLength={twoFactorMode === 'otp' ? 8 : 6}
                             value={twoFactorCode}
                             className={twoFactorMode === 'otp' ? 'two-factor-input--notification' : 'two-factor-input--totp'}
