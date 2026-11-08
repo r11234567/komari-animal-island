@@ -15,7 +15,7 @@
     "@bufbuild/protobuf": "^2.10.0",
     "@connectrpc/connect": "^2.1.1",
     "@connectrpc/connect-web": "^2.1.1",
-    "@komari/proto": "github:r11234567/komari-proto#v0.1.28",
+    "@komari/proto": "github:r11234567/komari-proto#main",
     "animal-island-ui": "^1.6.0",
     "classnames": "^2.5.1",
     "react": "^18.3.1",
