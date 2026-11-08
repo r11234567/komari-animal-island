@@ -104,6 +104,10 @@ button, input { font: inherit; }
 .node-grid.list-view { grid-template-columns: 1fr; }
 .km-node-row { display: grid; grid-template-columns: minmax(260px, 2fr) repeat(3, minmax(90px, .65fr)) minmax(170px, 1fr) auto auto; align-items: center; gap: 18px; width: 100%; padding: 16px 18px !important; }
 .km-node-row.has-network-latency { grid-template-columns: minmax(230px, 1.6fr) repeat(3, minmax(72px, .45fr)) minmax(160px, .9fr) minmax(240px, 1.25fr) auto auto; gap: 12px; }
+.km-node-row.has-gpu-4 { grid-template-columns: minmax(240px, 1.8fr) repeat(4, minmax(75px, .55fr)) minmax(160px, 1fr) auto auto; gap: 14px; }
+.km-node-row.has-gpu-4.has-network-latency { grid-template-columns: minmax(210px, 1.4fr) repeat(4, minmax(65px, .42fr)) minmax(140px, .85fr) minmax(210px, 1.15fr) auto auto; gap: 10px; }
+.km-node-row.has-gpu-5 { grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(70px, .5fr)) minmax(150px, .95fr) auto auto; gap: 12px; }
+.km-node-row.has-gpu-5.has-network-latency { grid-template-columns: minmax(195px, 1.3fr) repeat(5, minmax(58px, .38fr)) minmax(135px, .8fr) minmax(200px, 1.1fr) auto auto; gap: 10px; }
 .row-network-latency { display: grid; gap: 5px; min-width: 0; }
 .row-network-latency > span { color: var(--animal-node-muted); font-size: 12px; }
 .row-network-latency > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }

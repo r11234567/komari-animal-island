@@ -179,6 +179,57 @@ server.listen(PORT, async () => {
     await page.screenshot({ path: shot1, fullPage: false });
     console.log('Saved:', shot1);
 
+    // 1.1 滚动到服务器列表，查看卡片视图中的 GPU 与显存展示（Singapore 节点有 GPU/显存，Japan 节点无 GPU 则不展示）
+    await page.evaluate(() => {
+      document.querySelector('.server-section')?.scrollIntoView({ behavior: 'instant', block: 'start' });
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const shot6 = path.join(ARTIFACT_DIR, 'screenshot-6-gpu-card.png');
+    await page.screenshot({ path: shot6, fullPage: false });
+    console.log('Saved:', shot6);
+
+    // 1.2 点击切换到列表视图
+    await page.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('.filters label'));
+      const listLabel = labels.find((l) => l.textContent.includes('列表'));
+      listLabel?.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+    const shot7 = path.join(ARTIFACT_DIR, 'screenshot-7-gpu-list.png');
+    await page.screenshot({ path: shot7, fullPage: false });
+    console.log('Saved:', shot7);
+
+    // 1.3 切回卡片视图并点击 Singapore 节点的“查看详情”按钮
+    await page.evaluate(() => {
+      const labels = Array.from(document.querySelectorAll('.filters label'));
+      const cardLabel = labels.find((l) => l.textContent.includes('卡片'));
+      cardLabel?.click();
+    });
+    await new Promise((r) => setTimeout(r, 400));
+
+    await page.evaluate(() => {
+      const cards = Array.from(document.querySelectorAll('.km-node-card'));
+      const sgCard = cards.find((c) => c.textContent.includes('Singapore'));
+      const detailBtn = sgCard?.querySelector('button');
+      detailBtn?.click();
+    });
+    await page.waitForSelector('.detail-modal');
+    await new Promise((r) => setTimeout(r, 600));
+
+    // 截图 8：节点详情模态框中的 GPU / 显存 / 温度展示
+    const shot8 = path.join(ARTIFACT_DIR, 'screenshot-8-gpu-modal.png');
+    await page.screenshot({ path: shot8, fullPage: false });
+    console.log('Saved:', shot8);
+
+    // 关闭详情弹窗
+    await page.evaluate(() => {
+      const closeBtn = document.querySelector('.detail-modal button');
+      closeBtn?.click();
+    });
+    await new Promise((r) => setTimeout(r, 500));
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await new Promise((r) => setTimeout(r, 300));
+
     // 2. 点击“岛民”按钮弹出登录模态框
     const residentBtn = await page.waitForSelector('.resident-btn');
     await residentBtn.click();

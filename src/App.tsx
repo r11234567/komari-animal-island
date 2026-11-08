@@ -102,9 +102,96 @@ const formatUptime = (seconds = 0) => {
   return `${days}天 ${hours}时 ${minutes}分`;
 };
 
+interface GpuStats {
+  hasGpu: boolean;
+  hasGpuMem: boolean;
+  usage?: number;
+  memoryUsed?: number;
+  memoryTotal?: number;
+  deviceName?: string;
+  temperature?: number;
+}
+
+function getGpuStats(node?: NodeInfo, live?: LiveState): GpuStats {
+  if (!live && !node) {
+    return { hasGpu: false, hasGpuMem: false };
+  }
+
+  const gpu = live?.gpu as any;
+  const rawGpus = (gpu?.detailed_info || gpu?.devices || (Array.isArray(gpu) ? gpu : null) || (live as any)?.gpus) as Array<any> | null;
+
+  let deviceName = node?.gpu_name || gpu?.name || '';
+  let usage: number | undefined = undefined;
+  let memoryUsed = 0;
+  let memoryTotal = 0;
+  let temperature: number | undefined = undefined;
+  let deviceCount = 0;
+
+  if (rawGpus && Array.isArray(rawGpus) && rawGpus.length > 0) {
+    deviceCount = rawGpus.length;
+    let sumUsage = 0;
+    let measuredCount = 0;
+
+    for (const d of rawGpus) {
+      if (!deviceName && d?.name) deviceName = d.name;
+      const memUsed = Number(d?.memory_used ?? d?.memoryUsedBytes ?? d?.used ?? 0);
+      const memTotal = Number(d?.memory_total ?? d?.memoryTotalBytes ?? d?.total ?? 0);
+      if (memUsed > 0) memoryUsed += memUsed;
+      if (memTotal > 0) memoryTotal += memTotal;
+
+      const util = d?.utilization ?? d?.utilizationPercent ?? d?.usage;
+      if (util !== undefined && util !== null && Number.isFinite(Number(util))) {
+        sumUsage += Number(util);
+        measuredCount++;
+      }
+      if (d?.temperature ?? d?.temperatureCelsius) {
+        temperature = Number(d.temperature ?? d.temperatureCelsius);
+      }
+    }
+
+    if (measuredCount > 0) {
+      usage = Math.round((sumUsage / measuredCount) * 10) / 10;
+    }
+  }
+
+  if (usage === undefined) {
+    const candidateUsage = gpu?.average_usage ?? gpu?.usage ?? (live as any)?.gpu_usage ?? (live as any)?.gpu;
+    if (candidateUsage !== undefined && candidateUsage !== null && Number.isFinite(Number(candidateUsage))) {
+      usage = Math.round(Number(candidateUsage) * 10) / 10;
+    }
+  }
+
+  if (memoryTotal === 0) {
+    const memTotal = Number(gpu?.total_memory ?? gpu?.memory_total ?? (live as any)?.gpu_memory_total ?? 0);
+    const memUsed = Number(gpu?.used_memory ?? gpu?.memory_used ?? (live as any)?.gpu_memory_used ?? 0);
+    if (memTotal > 0) {
+      memoryTotal = memTotal;
+      memoryUsed = memUsed;
+    }
+  }
+
+  const hasGpuDeviceName = Boolean(deviceName && !['none', 'unknown', 'null', 'false', '0', ''].includes(deviceName.trim().toLowerCase()));
+  const hasUsage = usage !== undefined && Number.isFinite(usage) && usage >= 0;
+  const hasMemory = memoryTotal > 0 && Number.isFinite(memoryTotal);
+
+  // 默认不展示：仅当后端返回了有效 GPU 数据（存在设备/指标且数值正常）时展示
+  const hasGpu = (deviceCount > 0 || hasGpuDeviceName || Boolean(gpu)) && hasUsage;
+  const hasGpuMem = hasMemory;
+
+  return {
+    hasGpu,
+    hasGpuMem,
+    usage: hasGpu ? usage : undefined,
+    memoryUsed: hasGpuMem ? memoryUsed : undefined,
+    memoryTotal: hasGpuMem ? memoryTotal : undefined,
+    deviceName: hasGpuDeviceName ? deviceName : undefined,
+    temperature,
+  };
+}
+
 function Metric({ label, used, total }: { label: string; used?: number; total?: number }) {
   const value = percent(used, total);
-  const displayValue = label === 'CPU'
+  const displayValue = label === 'CPU' || label === 'GPU'
     ? `${Math.round(used || 0)}% / ${(total || 100).toFixed(1)}%`
     : `${formatBytes(used)} / ${formatBytes(total)}`;
   return (
@@ -120,6 +207,8 @@ function NodeCard({ node, live, online, latency, networkLatencies = [], showLate
   node: NodeInfo; live?: LiveState; online: boolean; latency?: number | null; networkLatencies?: NetworkLatency[]; showLatency: boolean; onDetails: () => void;
 }) {
   const displayedLatency = liveLatency(live) ?? latency;
+  const gpuStats = getGpuStats(node, live);
+
   return (
     <Card className="km-node-card" color={online ? 'default' : 'brown'} pattern={online ? 'app-teal' : 'none'}>
       <div className="node-heading">
@@ -134,10 +223,15 @@ function NodeCard({ node, live, online, latency, networkLatencies = [], showLate
       </div>
       <div className="node-meta">
         <span>{online ? formatUptime(live?.uptime) : '等待连接'}</span>
-        <span>{node.virtualization?.toUpperCase() || 'UNKNOWN'} · {node.region || '未知地区'}</span>
+        <span>
+          {node.virtualization?.toUpperCase() || 'UNKNOWN'} · {node.region || '未知地区'}
+          {gpuStats.deviceName ? ` · ${gpuStats.deviceName}` : ''}
+        </span>
       </div>
       <Metric label="CPU" used={live?.cpu?.usage} total={100} />
       <Metric label="内存" used={live?.ram?.used} total={live?.ram?.total || node.mem_total} />
+      {gpuStats.hasGpu && <Metric label="GPU" used={gpuStats.usage} total={100} />}
+      {gpuStats.hasGpuMem && <Metric label="显存" used={gpuStats.memoryUsed} total={gpuStats.memoryTotal} />}
       <Metric label="硬盘" used={live?.disk?.used} total={live?.disk?.total || node.disk_total} />
       <Metric label="SWAP" used={live?.swap?.used} total={live?.swap?.total || node.swap_total} />
       <div className={`network-grid ${networkLatencies.length ? 'has-network-latency' : ''}`}>
@@ -155,14 +249,30 @@ function NodeCard({ node, live, online, latency, networkLatencies = [], showLate
 function NodeListRow({ node, live, online, networkLatencies = [], onDetails }: {
   node: NodeInfo; live?: LiveState; online: boolean; networkLatencies?: NetworkLatency[]; onDetails: () => void;
 }) {
+  const gpuStats = getGpuStats(node, live);
+  const extraStatsCount = (gpuStats.hasGpu ? 1 : 0) + (gpuStats.hasGpuMem ? 1 : 0);
+  const rowClasses = [
+    'km-node-row',
+    networkLatencies.length ? 'has-network-latency' : '',
+    extraStatsCount === 1 ? 'has-gpu-4' : extraStatsCount === 2 ? 'has-gpu-5' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <Card className={`km-node-row ${networkLatencies.length ? 'has-network-latency' : ''}`} color={online ? 'default' : 'brown'} pattern={online ? 'app-teal' : 'none'}>
+    <Card className={rowClasses} color={online ? 'default' : 'brown'} pattern={online ? 'app-teal' : 'none'}>
       <div className="row-identity">
         <span className={`status-dot ${online ? 'online' : ''}`} aria-hidden="true" />
-        <div><strong>{node.name}</strong><span>{regionLabel(node.region)} · {node.virtualization?.toUpperCase() || 'UNKNOWN'}</span></div>
+        <div>
+          <strong>{node.name}</strong>
+          <span>
+            {regionLabel(node.region)} · {node.virtualization?.toUpperCase() || 'UNKNOWN'}
+            {gpuStats.deviceName ? ` · ${gpuStats.deviceName}` : ''}
+          </span>
+        </div>
       </div>
       <div className="row-stat"><span>CPU</span><strong>{formatPercent(live?.cpu?.usage)}</strong></div>
       <div className="row-stat"><span>内存</span><strong>{formatPercent(percent(live?.ram?.used, live?.ram?.total || node.mem_total))}</strong></div>
+      {gpuStats.hasGpu && <div className="row-stat"><span>GPU</span><strong>{formatPercent(gpuStats.usage)}</strong></div>}
+      {gpuStats.hasGpuMem && <div className="row-stat"><span>显存</span><strong>{formatPercent(percent(gpuStats.memoryUsed, gpuStats.memoryTotal))}</strong></div>}
       <div className="row-stat"><span>硬盘</span><strong>{formatPercent(percent(live?.disk?.used, live?.disk?.total || node.disk_total))}</strong></div>
       <div className="row-stat row-network"><span>网络</span><strong>↓ {formatSpeed(live?.network?.down)} / ↑ {formatSpeed(live?.network?.up)}</strong></div>
       {networkLatencies.length > 0 && <div className="row-network-latency"><span>三网延迟</span><div>{networkLatencies.map((item) => <Tag key={item.taskId} size="small" color={item.latency == null ? 'brown' : latencyColor(item.latency)} variant="soft">{item.name} {item.latency == null ? '—' : item.latency} ms</Tag>)}</div></div>}
@@ -324,6 +434,7 @@ export default function App() {
   const speedDown = liveValues.reduce((sum, state) => sum + (state.network?.down || 0), 0);
   const speedUp = liveValues.reduce((sum, state) => sum + (state.network?.up || 0), 0);
   const current = selected ? live[selected.uuid] : undefined;
+  const currentGpuStats = getGpuStats(selected || undefined, current);
   const theme = settings.theme_settings ?? {};
   const brandTitle = theme.brand_title?.trim() || '机机森友会';
   const brandSubtitle = theme.brand_subtitle?.trim() || '集合啦！';
@@ -818,13 +929,13 @@ export default function App() {
         )}
       </div>
 
-      <Modal open={Boolean(selected)} width="min(680px, calc(100vw - 64px))" className="detail-modal" maskStyle={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }} title={selected && <div className="detail-header"><div className="detail-heading-copy"><strong>{selected.name}</strong><span>{selected.os || '未知系统版本'}</span></div><div className="detail-tags"><Tag color="app-green">{online.includes(selected.uuid) || demo ? '在线' : '离线'}</Tag><Tag color="app-blue">{regionLabel(selected.region)}</Tag><Tag color="app-blue">{selected.virtualization || '未知虚拟化'}</Tag><Tag color="app-blue">{selected.arch || '未知架构'}</Tag></div></div>} onClose={() => setSelected(null)} footer={<Button type="primary" onClick={() => setSelected(null)}>回到岛屿</Button>} typewriter={false}>
+      <Modal open={Boolean(selected)} width="min(680px, calc(100vw - 64px))" className="detail-modal" maskStyle={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 32 }} title={selected && <div className="detail-header"><div className="detail-heading-copy"><strong>{selected.name}</strong><span>{selected.os || '未知系统版本'}</span></div><div className="detail-tags"><Tag color="app-green">{online.includes(selected.uuid) || demo ? '在线' : '离线'}</Tag><Tag color="app-blue">{regionLabel(selected.region)}</Tag><Tag color="app-blue">{selected.virtualization || '未知虚拟化'}</Tag><Tag color="app-blue">{selected.arch || '未知架构'}</Tag>{currentGpuStats.deviceName && <Tag color="app-yellow">{currentGpuStats.deviceName}</Tag>}</div></div>} onClose={() => setSelected(null)} footer={<Button type="primary" onClick={() => setSelected(null)}>回到岛屿</Button>} typewriter={false}>
         {selected && <div className="details">
           <div className="detail-copy">
             {selected.public_remark && <p>{selected.public_remark}</p>}
             <div className="detail-info-grid">
               <Card className={`detail-stat-card${hasBilling(selected) ? '' : ' detail-stat-card--full'}`} pattern="app-teal">
-                <div className="detail-grid">{showLatency && pingTasksActive && (liveLatency(current) ?? latencies[selected.uuid]) != null && <><span>延迟</span><strong>{liveLatency(current) ?? latencies[selected.uuid]} ms</strong></>}<span>负载</span><strong>{current?.load?.load1?.toFixed(2) || '—'}</strong><span>进程</span><strong>{current?.process ?? '—'}</strong><span>TCP / UDP</span><strong>{current?.connections?.tcp ?? '—'} / {current?.connections?.udp ?? '—'}</strong><span>运行时间</span><strong>{formatUptime(current?.uptime)}</strong></div>
+                <div className="detail-grid">{showLatency && pingTasksActive && (liveLatency(current) ?? latencies[selected.uuid]) != null && <><span>延迟</span><strong>{liveLatency(current) ?? latencies[selected.uuid]} ms</strong></>}<span>负载</span><strong>{current?.load?.load1?.toFixed(2) || '—'}</strong><span>进程</span><strong>{current?.process ?? '—'}</strong><span>TCP / UDP</span><strong>{current?.connections?.tcp ?? '—'} / {current?.connections?.udp ?? '—'}</strong><span>运行时间</span><strong>{formatUptime(current?.uptime)}</strong>{currentGpuStats.temperature !== undefined && <><span>GPU 温度</span><strong>{currentGpuStats.temperature} °C</strong></>}</div>
               </Card>
               {hasBilling(selected) && <Card className="detail-stat-card detail-billing" pattern="app-teal">
                 <strong>{billingCycleLabel(Number(selected.billing_cycle))} {formatMoney(Number(selected.price))} {selected.currency || '—'}</strong>
@@ -837,6 +948,8 @@ export default function App() {
           <div className="detail-metrics">
             <Metric label="CPU" used={current?.cpu?.usage} total={100} />
             <Metric label="内存" used={current?.ram?.used} total={current?.ram?.total || selected.mem_total} />
+            {currentGpuStats.hasGpu && <Metric label="GPU" used={currentGpuStats.usage} total={100} />}
+            {currentGpuStats.hasGpuMem && <Metric label="显存" used={currentGpuStats.memoryUsed} total={currentGpuStats.memoryTotal} />}
             <Metric label="硬盘" used={current?.disk?.used} total={current?.disk?.total || selected.disk_total} />
           </div>
         </div>}

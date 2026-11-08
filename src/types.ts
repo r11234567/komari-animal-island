@@ -8,6 +8,7 @@ export interface NodeInfo {
   os?: string;
   cpu_name?: string;
   cpu_cores?: number;
+  gpu_name?: string;
   mem_total?: number;
   swap_total?: number;
   disk_total?: number;
@@ -19,12 +20,29 @@ export interface NodeInfo {
   expired_at?: string | null;
 }
 
+export interface GpuDevice {
+  name?: string;
+  memory_total?: number;
+  memory_used?: number;
+  utilization?: number;
+  temperature?: number;
+}
+
 export interface LiveState {
   cpu?: { usage?: number };
   ram?: { total?: number; used?: number };
   swap?: { total?: number; used?: number };
   disk?: { total?: number; used?: number };
   network?: { up?: number; down?: number; totalUp?: number; totalDown?: number };
+  gpu?: {
+    count?: number;
+    usage?: number;
+    average_usage?: number;
+    total_memory?: number;
+    used_memory?: number;
+    devices?: GpuDevice[];
+    detailed_info?: GpuDevice[];
+  };
   load?: { load1?: number; load5?: number; load15?: number };
   connections?: { tcp?: number; udp?: number };
   uptime?: number;

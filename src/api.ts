@@ -38,6 +38,7 @@ const nodeInfoOf = (agent: AgentSummary): NodeInfo => {
     os: basic?.os,
     cpu_name: basic?.cpuName,
     cpu_cores: basic?.cpuCores,
+    gpu_name: basic?.gpuName || undefined,
     mem_total: asNumber(basic?.memoryTotalBytes),
     swap_total: asNumber(basic?.swapTotalBytes),
     disk_total: asNumber(basic?.diskTotalBytes),
@@ -64,6 +65,38 @@ const liveStateOf = (report?: AgentReport): LiveState => {
   const network = report?.networkInterfaces.find((item) => item.name === 'aggregate')
     ?? report?.networkInterfaces[0];
   const disk = report?.disks.find((item) => item.mountPoint === 'aggregate') ?? report?.disks[0];
+
+  const gpus = resources?.gpus ?? [];
+  const measuredGpus = gpus.filter((g) => g.utilizationPercent !== undefined && Number.isFinite(g.utilizationPercent));
+  const avgGpuUsage = measuredGpus.length
+    ? measuredGpus.reduce((sum, g) => sum + (g.utilizationPercent ?? 0), 0) / measuredGpus.length
+    : (gpus.length && gpus[0].utilizationPercent !== undefined ? gpus[0].utilizationPercent : undefined);
+
+  const gpuMemTotal = gpus.reduce((sum, g) => sum + asNumber(g.memoryTotalBytes), 0);
+  const gpuMemUsed = gpus.reduce((sum, g) => sum + asNumber(g.memoryUsedBytes), 0);
+
+  const gpuData = gpus.length > 0 ? {
+    count: gpus.length,
+    usage: avgGpuUsage !== undefined ? Math.round(avgGpuUsage * 10) / 10 : undefined,
+    average_usage: avgGpuUsage !== undefined ? Math.round(avgGpuUsage * 10) / 10 : undefined,
+    total_memory: gpuMemTotal > 0 ? gpuMemTotal : undefined,
+    used_memory: gpuMemTotal > 0 ? gpuMemUsed : undefined,
+    devices: gpus.map((g) => ({
+      name: g.name,
+      utilization: g.utilizationPercent,
+      memory_used: asNumber(g.memoryUsedBytes),
+      memory_total: asNumber(g.memoryTotalBytes),
+      temperature: g.temperatureCelsius,
+    })),
+    detailed_info: gpus.map((g) => ({
+      name: g.name,
+      utilization: g.utilizationPercent,
+      memory_used: asNumber(g.memoryUsedBytes),
+      memory_total: asNumber(g.memoryTotalBytes),
+      temperature: g.temperatureCelsius,
+    })),
+  } : undefined;
+
   return {
     cpu: { usage: resources?.cpuPercent ?? 0 },
     ram: {
@@ -81,6 +114,7 @@ const liveStateOf = (report?: AgentReport): LiveState => {
       totalUp: asNumber(network?.bytesSent),
       totalDown: asNumber(network?.bytesReceived),
     },
+    gpu: gpuData,
     load: {
       load1: resources?.loadAverage[0] ?? 0,
       load5: resources?.loadAverage[1] ?? 0,
