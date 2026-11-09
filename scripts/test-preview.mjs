@@ -36,31 +36,28 @@ const server = http.createServer((req, res) => {
 
   // 模拟 Connect-RPC PasswordLoginService.BeginPasswordLogin
   if (pathname === '/komari.credential.v1.PasswordLoginService/BeginPasswordLogin' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    const chunks = [];
+    req.on('data', (chunk) => { chunks.push(chunk); });
     req.on('end', () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      try {
-        const payload = JSON.parse(body || '{}');
-        // 如果用户名包含 totp，模拟未配置通知渠道、仅启用了 TOTP 的场景
-        if (payload.username?.includes('totp')) {
-          res.end(JSON.stringify({
-            authenticated: false,
-            providers: [
-              { id: 'native:totp', displayName: '身份验证器 (TOTP)', kind: 1 },
-            ],
-            expiresAt: new Date(Date.now() + 180000).toISOString(),
-          }));
-          return;
-        }
-      } catch {}
+      const raw = Buffer.concat(chunks);
+      const isProto = req.headers['content-type']?.includes('application/proto') || !req.headers['content-type']?.includes('application/json');
+      const isTotp = raw.toString('utf8').includes('totp');
 
-      // 默认场景：已绑定邮箱/TG，后端直接要求 OTP 且自动发送验证码
+      if (isProto) {
+        res.writeHead(200, { 'Content-Type': 'application/proto' });
+        const hex = isTotp
+          ? '12250a0b6e61746976653a746f74701216e8baabe4bbbde9aa8ce8af81e599a82028544f545029'
+          : '12290a106e61746976653a656d61696c5f6f74701215e982aee7aeb1e9809ae79fa5e9aa8ce8af81e7a081';
+        res.end(Buffer.from(hex, 'hex'));
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         authenticated: false,
-        providers: [
-          { id: 'native:email_otp', displayName: '邮箱通知验证码', kind: 2 },
-        ],
+        providers: isTotp
+          ? [{ id: 'native:totp', displayName: '身份验证器 (TOTP)', kind: 1 }]
+          : [{ id: 'native:email_otp', displayName: '邮箱通知验证码', kind: 2 }],
         expiresAt: new Date(Date.now() + 180000).toISOString(),
       }));
     });
@@ -69,49 +66,76 @@ const server = http.createServer((req, res) => {
 
   // 模拟 Connect-RPC PasswordLoginService.BeginLoginVerification
   if (pathname === '/komari.credential.v1.PasswordLoginService/BeginLoginVerification' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    const chunks = [];
+    req.on('data', (chunk) => { chunks.push(chunk); });
     req.on('end', () => {
-      try {
-        const payload = JSON.parse(body || '{}');
-        const providerId = payload.providerId || 'native:email_otp';
-        const isNotice = providerId.includes('email') || providerId.includes('telegram');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          challengeId: 'challenge_mock_' + Date.now(),
-          expiresAt: new Date(Date.now() + 180000).toISOString(),
-          promptType: 'otp',
-          prompt: isNotice ? {
-            length: 8,
-            charset: 'alphanumeric',
-            kind: 'email',
-            address: 'you***@example.com',
-            cooldown: 60,
-          } : {
-            digits: 6,
-            method: 'totp',
-          },
-        }));
-      } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: 'Bad request' }));
+      const raw = Buffer.concat(chunks);
+      const isProto = req.headers['content-type']?.includes('application/proto') || !req.headers['content-type']?.includes('application/json');
+      const isTotp = raw.toString('utf8').includes('totp');
+
+      if (isProto) {
+        res.writeHead(200, { 'Content-Type': 'application/proto' });
+        const hex = isTotp
+          ? '0a176d6f636b5f6368616c6c656e67655f746f74705f3132331a036f7470222a0a130a066c656e67746812091100000000000018400a130a066469676974731209110000000000001840'
+          : '0a126d6f636b5f6368616c6c656e67655f3132331a036f747022730a130a066c656e67746812091100000000000020400a190a0763686172736574120e1a0c616c7068616e756d657269630a1c0a066d6574686f6412121a106e6f74696669636174696f6e5f6f74700a230a0b64657374696e6174696f6e12141a12796f752a2a2a406578616d706c652e636f6d';
+        res.end(Buffer.from(hex, 'hex'));
+        return;
       }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        challengeId: 'challenge_mock_' + Date.now(),
+        expiresAt: new Date(Date.now() + 180000).toISOString(),
+        promptType: 'otp',
+        prompt: isTotp ? {
+          digits: 6,
+          method: 'totp',
+        } : {
+          length: 8,
+          charset: 'alphanumeric',
+          kind: 'email',
+          address: 'you***@example.com',
+          cooldown: 60,
+        },
+      }));
     });
     return;
   }
 
   // 模拟 Connect-RPC PasswordLoginService.CompletePasswordLogin
   if (pathname === '/komari.credential.v1.PasswordLoginService/CompletePasswordLogin' && req.method === 'POST') {
-    let body = '';
-    req.on('data', (chunk) => { body += chunk; });
+    const chunks = [];
+    req.on('data', (chunk) => { chunks.push(chunk); });
     req.on('end', () => {
       userLoggedIn = true;
+      const isProto = req.headers['content-type']?.includes('application/proto') || !req.headers['content-type']?.includes('application/json');
+      if (isProto) {
+        res.writeHead(200, {
+          'Content-Type': 'application/proto',
+          'Set-Cookie': 'session_token=valid_token_mock; Path=/; HttpOnly',
+        });
+        res.end(Buffer.from('0801', 'hex'));
+        return;
+      }
       res.writeHead(200, {
         'Content-Type': 'application/json',
         'Set-Cookie': 'session_token=valid_token_mock; Path=/; HttpOnly',
       });
       res.end(JSON.stringify({ authenticated: true }));
     });
+    return;
+  }
+
+  // 模拟 Connect-RPC PasswordLoginService.CancelPasswordLogin
+  if (pathname === '/komari.credential.v1.PasswordLoginService/CancelPasswordLogin' && req.method === 'POST') {
+    const isProto = req.headers['content-type']?.includes('application/proto') || !req.headers['content-type']?.includes('application/json');
+    if (isProto) {
+      res.writeHead(200, { 'Content-Type': 'application/proto' });
+      res.end(Buffer.alloc(0));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({}));
     return;
   }
 

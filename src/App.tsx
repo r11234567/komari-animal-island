@@ -11,8 +11,41 @@ import { connectLive, loadInitialData, loadNetworkLatencies, loadPingLatencies, 
 import type { NetworkLatency } from './api';
 import type { LiveState, NodeInfo, PublicSettings } from './types';
 import { saveAuthToken } from './auth';
-import { passwordLogin } from './connect';
-import { ConnectError } from '@connectrpc/connect';
+import { useNativePasswordLogin } from './hooks/useNativePasswordLogin';
+import { normalizeOTP, validOTP } from './utils/otpInput';
+
+function formatLoginError(error: string): string {
+  if (!error) return '';
+  const lower = error.toLowerCase();
+  if (lower.includes('credential verification failed')) {
+    return '账号或通行密码错误，请核对后重试';
+  }
+  if (lower.includes('invalid argument') || lower.includes('username and password are required')) {
+    return '请输入完整的岛民账号与通行密码';
+  }
+  if (lower.includes('capacity reached') || lower.includes('limit') || lower.includes('too many') || lower.includes('attempt limit')) {
+    return '登录尝试过于频繁，请稍后再试';
+  }
+  if (lower.includes('cooldown') || lower.includes('wait up to 60 seconds')) {
+    return '验证码发送过于频繁，请稍候再试';
+  }
+  if (lower.includes('enter the complete verification code')) {
+    return '请输入完整的两步验证码';
+  }
+  if (lower.includes('unsupported credential prompt')) {
+    return '不支持的二次验证类型';
+  }
+  if (lower.includes('no available second factor')) {
+    return '未配置可用的二次验证方式';
+  }
+  if (lower.includes('login was not completed')) {
+    return '验证码错误或已失效，请重新输入';
+  }
+  if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('connection refused')) {
+    return '无法连接到 Komari 验证服务，请检查网络';
+  }
+  return error;
+}
 
 type ViewMode = 'grid' | 'list';
 type Appearance = 'light' | 'dark';
@@ -418,18 +451,18 @@ export default function App() {
   const [selected, setSelected] = useState<NodeInfo | null>(null);
   const [drawer, setDrawer] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [loginError, setLoginError] = useState('');
-  const [twoFactorPending, setTwoFactorPending] = useState(false);
-  const [twoFactorMode, setTwoFactorMode] = useState<'otp' | 'totp'>('otp');
-  const [twoFactorCode, setTwoFactorCode] = useState('');
-  const [activeProviderId, setActiveProviderId] = useState<string>('');
-  const [challengeId, setChallengeId] = useState<string>('');
-  const [targetAddress, setTargetAddress] = useState<string>('');
+  const [loginUsername, setLoginUsername] = useState('');
   const [resendCooldown, setResendCooldown] = useState(0);
-  const [savedCredentials, setSavedCredentials] = useState<{ username: string; password: string }>({ username: '', password: '' });
   const [loginTab, setLoginTab] = useState<string>('password');
   const [session, setSession] = useState<{ loggedIn: boolean; username: string }>({ loggedIn: false, username: '' });
+
+  const login = useNativePasswordLogin(async () => {
+    setSession({ loggedIn: true, username: loginUsername || '岛民' });
+    Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
+    window.setTimeout(() => {
+      window.location.href = '/admin/dashboard';
+    }, 350);
+  }, 'inline');
   const [backgroundVariant] = useState(() => {
     const previous = Number.parseInt(localStorage.getItem('animal-bg-variant') || '-1', 10);
     const next = Number.isFinite(previous) ? (previous + 1) % 4 : 0;
@@ -595,6 +628,20 @@ export default function App() {
     });
   }, [loading]);
 
+  const isOtp = login.format.alphanumeric ||
+    login.provider.includes('email') ||
+    login.provider.includes('telegram') ||
+    login.promptInfo?.method === 'notification_otp';
+  const targetAddress = (login.promptInfo?.destination as string) ||
+    (login.promptInfo?.address as string) ||
+    (login.provider.includes('telegram') ? '绑定 Telegram' : '已绑定邮箱');
+
+  useEffect(() => {
+    if (login.challenge && isOtp) {
+      setResendCooldown(60);
+    }
+  }, [login.challenge, isOtp]);
+
   useEffect(() => {
     if (resendCooldown <= 0) return;
     const timer = window.setInterval(() => {
@@ -602,21 +649,6 @@ export default function App() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [resendCooldown]);
-
-  const resetPasswordStep = () => {
-    if (challengeId) {
-      void passwordLogin.cancelPasswordLogin({}).catch(() => {});
-    }
-    setTwoFactorPending(false);
-    setTwoFactorMode('otp');
-    setTwoFactorCode('');
-    setLoginError('');
-    setChallengeId('');
-    setTargetAddress('');
-    setResendCooldown(0);
-    setActiveProviderId('');
-    setSavedCredentials({ username: '', password: '' });
-  };
 
   const openResidentLogin = async () => {
     let currentSession = session;
@@ -632,7 +664,7 @@ export default function App() {
       window.location.href = '/api/oauth';
       return;
     }
-    resetPasswordStep();
+    void login.reset();
     setLoginTab(settings.disable_password_login ? (settings.oauth_enable ? 'oauth' : 'passkey') : 'password');
     setLoginOpen(true);
   };
@@ -656,251 +688,33 @@ export default function App() {
     }
   };
 
-  const startVerificationChallenge = async (providerId: string) => {
-    setLoginLoading(true);
-    setLoginError('');
-    try {
-      const res = await passwordLogin.beginLoginVerification({ providerId });
-      const cId = res.challengeId;
-      const prompt = (res.prompt ?? {}) as Record<string, any>;
-      const isOtp =
-        prompt.charset === 'alphanumeric' ||
-        prompt.length === 8 ||
-        prompt.method === 'notification_otp' ||
-        providerId.includes('email') ||
-        providerId.includes('telegram');
-
-      setChallengeId(cId);
-      setActiveProviderId(providerId);
-      setTwoFactorMode(isOtp ? 'otp' : 'totp');
-      if (isOtp) {
-        const dest = (prompt.destination as string) || (prompt.address as string) || (providerId.includes('telegram') ? '绑定 Telegram' : '已绑定邮箱');
-        setTargetAddress(dest);
-        setResendCooldown(typeof prompt.cooldown === 'number' ? prompt.cooldown : 60);
-      } else {
-        setTargetAddress('');
-        setResendCooldown(0);
-      }
-      return true;
-    } catch (err) {
-      const msg = err instanceof ConnectError ? err.rawMessage : (err instanceof Error ? err.message : '验证服务请求失败');
-      setLoginError(msg);
-      return false;
-    } finally {
-      setLoginLoading(false);
-    }
-  };
-
   const handleResendOtp = async () => {
-    if (resendCooldown > 0 || loginLoading) return;
-    await startVerificationChallenge(activeProviderId || 'native:email_otp');
+    if (resendCooldown > 0 || login.busy) return;
+    const ok = await login.beginFactor();
+    if (ok) {
+      setResendCooldown(60);
+    }
   };
 
   const handlePasswordLogin = async (values: LoginValues) => {
     const username = values.username?.trim() || '';
     const password = values.password || '';
     if (!username || !password) return;
-
-    setLoginError('');
-    setLoginLoading(true);
-
-    // 1. 优先调用 Connect-RPC PasswordLoginService (komari 最新规范)
-    try {
-      const beginResult = await passwordLogin.beginPasswordLogin({ username, password });
-
-      if (beginResult.authenticated) {
-        setSession({ loggedIn: true, username: username || '岛民' });
-        Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
-        window.setTimeout(() => {
-          window.location.href = '/admin/dashboard';
-        }, 350);
-        return;
-      }
-
-      // 规范逻辑：后端要求什么前端就用什么。
-      // 若后端配置了通知方式，返回的 provider 包含 native:email_otp 或 telegram_otp，并由后端自动发送验证码；
-      // 若未配置通知方式，仅启用 2FA，则使用 native:totp。
-      const rawProviders = beginResult.providers || [];
-      const chosen =
-        rawProviders.find((p) => p.id === 'native:email_otp' || p.id.includes('email')) ||
-        rawProviders.find((p) => p.id.includes('telegram')) ||
-        rawProviders[0];
-
-      if (!chosen) {
-        setLoginError('账号未配置可用的二次验证方式，请联系管理员。');
-        setLoginLoading(false);
-        return;
-      }
-
-      const providerId = chosen.id;
-      setSavedCredentials({ username, password });
-      setTwoFactorPending(true);
-      setTwoFactorCode('');
-
-      const started = await startVerificationChallenge(providerId);
-      if (!started) {
-        // 如果触发验证失败，停留在当前两步验证步骤展示错误，允许用户重新发送或返回
-        return;
-      }
-      return;
-    } catch (err) {
-      // 若 Connect-RPC 明确返回密码错误或限制，直接提示
-      if (err instanceof ConnectError) {
-        // 如果是 404 或未实现（旧版后端），才回退到 /api/login；否则直接提示错误
-        if (err.code !== 12 && err.code !== 5) {
-          setLoginError(err.rawMessage || '身份验证失败，请检查账号和密码。');
-          setLoginLoading(false);
-          return;
-        }
-      }
-    }
-
-    // 2. 回退到 /api/login（兼容尚未升级 Connect-RPC 的极老版本 Komari）
-    try {
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      const result = await response.json().catch(() => ({})) as {
-        status?: string;
-        message?: string;
-        token?: string;
-        session_token?: string;
-        data?: { token?: string; 'set-cookie'?: { session_token?: string } };
-      };
-      if (response.ok) {
-        const token = result?.data?.['set-cookie']?.session_token || result?.token || result?.session_token || result?.data?.token;
-        if (token) saveAuthToken(token);
-        setSession({ loggedIn: true, username: username || '岛民' });
-        Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
-        window.setTimeout(() => {
-          window.location.href = '/admin/dashboard';
-        }, 350);
-        return;
-      }
-
-      const msg = (result.message || '').toLowerCase();
-      if (
-        msg.includes('two-step') ||
-        msg.includes('two step') ||
-        msg.includes('2fa') ||
-        msg.includes('two factor') ||
-        msg.includes('verification') ||
-        msg.includes('两步')
-      ) {
-        setSavedCredentials({ username, password });
-        setTwoFactorPending(true);
-        setTwoFactorCode('');
-
-        const isTotp = msg.includes('2fa code is required');
-        if (isTotp) {
-          setTwoFactorMode('totp');
-          setActiveProviderId('native:totp');
-          setTargetAddress('');
-          setResendCooldown(0);
-        } else {
-          setTwoFactorMode('otp');
-          setActiveProviderId('native:email_otp');
-          setTargetAddress('已绑定邮箱/私聊');
-          setResendCooldown(60);
-        }
-        return;
-      }
-
-      setLoginError(result.message || '身份验证失败，请检查账号和密码。');
-    } catch {
-      setLoginError('无法连接验证服务，请稍后重试。');
-    } finally {
-      setLoginLoading(false);
-    }
+    setLoginUsername(username);
+    await login.start(username, password);
   };
 
   const handleTwoFactorSubmit = async () => {
-    const code = twoFactorCode.trim();
-    if (!code) {
-      setLoginError('请输入验证码。');
+    if (login.busy) return;
+    if (!login.code.trim()) {
+      login.setError('请输入验证码。');
       return;
     }
-
-    if (twoFactorMode === 'otp' && code.length !== 8) {
-      setLoginError('通知验证码为 8 位字母与数字组合，请核对。');
+    if (!validOTP(login.code, login.format)) {
+      login.setError(login.format.alphanumeric ? '通知验证码为 8 位字母与数字组合，请核对。' : '身份验证器动态码为 6 位数字，请核对。');
       return;
     }
-    if (twoFactorMode === 'totp' && code.length !== 6) {
-      setLoginError('身份验证器动态码为 6 位数字，请核对。');
-      return;
-    }
-
-    setLoginError('');
-    setLoginLoading(true);
-
-    const finalCode = twoFactorMode === 'otp' ? code.toUpperCase() : code;
-
-    // 1. 若拥有 challengeId，优先走 Connect-RPC CompletePasswordLogin
-    if (challengeId) {
-      try {
-        const result = await passwordLogin.completePasswordLogin({
-          challengeId,
-          proof: {
-            code: finalCode,
-          } as any,
-        });
-
-        if (result.authenticated) {
-          setSession({ loggedIn: true, username: savedCredentials.username || '岛民' });
-          Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
-          window.setTimeout(() => {
-            window.location.href = '/admin/dashboard';
-          }, 350);
-          return;
-        }
-      } catch (err) {
-        const msg = err instanceof ConnectError ? err.rawMessage : (err instanceof Error ? err.message : '验证码错误或已失效');
-        setLoginError(msg || '验证码错误或已失效，请重新输入。');
-        setLoginLoading(false);
-        return;
-      }
-    }
-
-    // 2. 回退到 /api/login（兼容模式）
-    try {
-      const response = await fetch('/api/login', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: savedCredentials.username,
-          password: savedCredentials.password,
-          '2fa_code': finalCode,
-          two_factor_code: finalCode,
-          code: finalCode,
-        }),
-      });
-      const result = await response.json().catch(() => ({})) as {
-        status?: string;
-        message?: string;
-        token?: string;
-        session_token?: string;
-        data?: { token?: string; 'set-cookie'?: { session_token?: string } };
-      };
-      if (response.ok) {
-        const token = result?.data?.['set-cookie']?.session_token || result?.token || result?.session_token || result?.data?.token;
-        if (token) saveAuthToken(token);
-        setSession({ loggedIn: true, username: savedCredentials.username || '岛民' });
-        Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
-        window.setTimeout(() => {
-          window.location.href = '/admin/dashboard';
-        }, 350);
-        return;
-      }
-      setLoginError(result.message || '验证码错误，请重新输入。');
-    } catch {
-      setLoginError('无法连接验证服务，请稍后重试。');
-    } finally {
-      setLoginLoading(false);
-    }
+    await login.verify();
   };
 
   const savePreferences = (values: { appearance?: string }) => {
@@ -1086,11 +900,9 @@ export default function App() {
         className="login-modal km-login-dialog"
         title="岛民身份验证"
         onClose={() => {
-          if (!loginLoading) {
+          if (!login.busy) {
             setLoginOpen(false);
-            setTwoFactorPending(false);
-            setTwoFactorCode('');
-            setLoginError('');
+            void login.reset();
           }
         }}
         footer={null}
@@ -1107,7 +919,7 @@ export default function App() {
             activeKey={loginTab}
             onChange={(key) => {
               setLoginTab(key);
-              setLoginError('');
+              login.setError('');
             }}
             leafAnimation
             items={[
@@ -1116,16 +928,16 @@ export default function App() {
                 label: '通行密码',
                 children: (
                   !settings.disable_password_login ? (
-                    twoFactorPending ? (
+                    login.pending ? (
                       <div className="login-tab-panel two-factor-step-panel">
                         <div className="login-method-badge">
-                          <Icon name={twoFactorMode === 'otp' ? 'icon-miles' : 'icon-critterpedia'} size={38} bounce />
+                          <Icon name={isOtp ? 'icon-miles' : 'icon-critterpedia'} size={38} bounce />
                         </div>
                         <h3 className="login-method-heading">
-                          {twoFactorMode === 'otp' ? '一次性通知验证码' : '身份验证器安全验证'}
+                          {isOtp ? '一次性通知验证码' : '身份验证器安全验证'}
                         </h3>
                         <div className="login-method-text">
-                          {twoFactorMode === 'otp' ? (
+                          {isOtp ? (
                             <>
                               已验证账号密码。8 位通知验证码已发送至：
                               <br />
@@ -1144,17 +956,14 @@ export default function App() {
 
                         <div className="two-factor-input-wrapper">
                           <Input
-                            inputMode={twoFactorMode === 'otp' ? 'text' : 'numeric'}
+                            inputMode={login.format.alphanumeric ? 'text' : 'numeric'}
                             autoComplete="one-time-code"
-                            placeholder={twoFactorMode === 'otp' ? 'XXXXXXXX' : '000000'}
-                            maxLength={twoFactorMode === 'otp' ? 8 : 6}
-                            value={twoFactorCode}
-                            className={twoFactorMode === 'otp' ? 'two-factor-input--notification' : 'two-factor-input--totp'}
+                            placeholder={login.format.alphanumeric ? 'XXXXXXXX' : '000000'}
+                            maxLength={login.format.length}
+                            value={login.code}
+                            className={login.format.alphanumeric ? 'two-factor-input--notification' : 'two-factor-input--totp'}
                             onChange={(e) => {
-                              const val = twoFactorMode === 'otp'
-                                ? e.target.value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
-                                : e.target.value.replace(/\D/g, '');
-                              setTwoFactorCode(val);
+                              login.setCode(normalizeOTP(e.target.value, login.format));
                             }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
@@ -1163,17 +972,17 @@ export default function App() {
                               }
                             }}
                             shadow
-                            disabled={loginLoading}
+                            disabled={login.busy}
                             autoFocus
                           />
                         </div>
 
-                        {twoFactorMode === 'otp' && (
+                        {isOtp && (
                           <div className="two-factor-resend-bar">
                             <button
                               type="button"
                               className="two-factor-resend-btn"
-                              disabled={loginLoading || resendCooldown > 0}
+                              disabled={login.busy || resendCooldown > 0}
                               onClick={handleResendOtp}
                             >
                               {resendCooldown > 0 ? `没有收到验证码？重新发送 (${resendCooldown}s)` : '没有收到验证码？重新发送'}
@@ -1181,13 +990,13 @@ export default function App() {
                           </div>
                         )}
 
-                        {loginError && <div className="login-error" role="alert">{loginError}</div>}
+                        {login.error && <div className="login-error" role="alert">{formatLoginError(login.error)}</div>}
                         <div className="two-factor-actions">
                           <Button
                             type="primary"
                             block
-                            loading={loginLoading}
-                            disabled={loginLoading || !twoFactorCode.trim()}
+                            loading={login.busy}
+                            disabled={login.busy || !validOTP(login.code, login.format)}
                             onClick={handleTwoFactorSubmit}
                           >
                             完成验证并上岛
@@ -1195,24 +1004,24 @@ export default function App() {
                           <Button
                             type="dashed"
                             block
-                            disabled={loginLoading}
-                            onClick={resetPasswordStep}
+                            disabled={login.busy}
+                            onClick={() => void login.reset()}
                           >
                             返回修改账号密码
                           </Button>
                         </div>
                       </div>
                     ) : (
-                      <Form layout="vertical" onFinish={(values) => handlePasswordLogin(values as LoginValues)} requiredMark={false} className="login-tab-panel">
+                      <Form layout="vertical" onFinish={(values) => void handlePasswordLogin(values as LoginValues)} requiredMark={false} className="login-tab-panel">
                         <FormItem label="岛民账号" name="username" rules={[{ required: true, message: '请输入岛民账号' }]}>
-                          <Input autoComplete="username" placeholder="请输入账号" shadow disabled={loginLoading} />
+                          <Input autoComplete="username" placeholder="请输入账号" shadow disabled={login.busy} />
                         </FormItem>
                         <FormItem label="通行密码" name="password" rules={[{ required: true, message: '请输入通行密码' }]}>
-                          <Input type="password" autoComplete="current-password" placeholder="请输入密码" shadow disabled={loginLoading} />
+                          <Input type="password" autoComplete="current-password" placeholder="请输入密码" shadow disabled={login.busy} />
                         </FormItem>
-                        {loginError && <div className="login-error" role="alert">{loginError}</div>}
+                        {login.error && <div className="login-error" role="alert">{formatLoginError(login.error)}</div>}
                         <FormItem className="login-submit-item">
-                          <Button type="primary" htmlType="submit" block loading={loginLoading}>上岛</Button>
+                          <Button type="primary" htmlType="submit" block loading={login.busy}>上岛</Button>
                         </FormItem>
                       </Form>
                     )
@@ -1239,7 +1048,7 @@ export default function App() {
                       type="button"
                       className="km-passkey-login animal-passkey-trigger"
                       onClick={triggerPasskeyLogin}
-                      disabled={loginLoading}
+                      disabled={login.busy}
                     >
                       <span className="passkey-btn-leaf">🍃</span>
                       <span>通过通行密钥登录</span>
@@ -1262,7 +1071,7 @@ export default function App() {
                     <Button
                       type="primary"
                       block
-                      disabled={loginLoading || !settings.oauth_enable}
+                      disabled={login.busy || !settings.oauth_enable}
                       onClick={() => { window.location.href = '/api/oauth'; }}
                     >
                       {settings.oauth_enable ? `使用 ${oauthTitle} 账号登岛` : `站点未开启 ${oauthTitle} 登录`}

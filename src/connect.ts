@@ -24,10 +24,11 @@ const transport = createConnectTransport({
 export const browser = createClient(BrowserService, transport);
 export const metrics = createClient(MetricsService, transport);
 
-// 登录服务专用客户端：原生 Connect-RPC JSON 格式，通过 same-origin Cookie 完成两步验证
+// 登录服务专用客户端：原生 Connect-RPC 二进制格式（与官方默认主题保持一致），通过 same-origin Cookie 完成两步验证
 const loginTransport = createConnectTransport({
   baseUrl: typeof window === 'undefined' ? 'http://localhost' : window.location.origin,
-  useBinaryFormat: false,
+  useBinaryFormat: true,
+  defaultTimeoutMs: 30_000,
   fetch: (input, init) => fetch(input, { ...init, credentials: 'same-origin' }),
 });
 
