@@ -13,6 +13,7 @@ import type { LiveState, NodeInfo, PublicSettings } from './types';
 import { saveAuthToken } from './auth';
 import { useNativePasswordLogin } from './hooks/useNativePasswordLogin';
 import { normalizeOTP, validOTP } from './utils/otpInput';
+import { formatTrafficGB } from './utils/trafficDisplay';
 
 function formatLoginError(error: string): string {
   if (!error) return '';
@@ -300,11 +301,14 @@ function getGpuStats(node?: NodeInfo, live?: LiveState): GpuStats {
   };
 }
 
-function Metric({ label, used, total }: { label: string; used?: number; total?: number }) {
+function Metric({ label, used, total, isTraffic }: { label: string; used?: number; total?: number; isTraffic?: boolean }) {
   const value = percent(used, total);
+  const isTrafficMetric = isTraffic || label === '已用' || label === '已用配额';
   const displayValue = label === 'CPU' || label === 'GPU'
     ? `${Math.round(used || 0)}% / ${(total || 100).toFixed(1)}%`
-    : `${formatBytes(used)} / ${formatBytes(total)}`;
+    : isTrafficMetric
+      ? `${formatTrafficGB(used)} / ${formatTrafficGB(total)}`
+      : `${formatBytes(used)} / ${formatBytes(total)}`;
   return (
     <div className="node-metric">
       <div className="metric-label"><span>{label}</span><strong>{formatPercent(value)}</strong></div>
@@ -369,7 +373,7 @@ function NodeCard({ node, live, online, latency, networkLatencies = [], showLate
       )}
       <div className={`network-grid ${networkLatencies.length ? 'has-network-latency' : ''}`}>
         <div><strong>实时网络</strong><span>下载 {formatSpeed(live?.network?.down)}</span><span>上传 {formatSpeed(live?.network?.up)}</span></div>
-        <div><strong>总流量</strong><span>接收 {formatBytes(live?.network?.totalDown)}</span><span>发送 {formatBytes(live?.network?.totalUp)}</span></div>
+        <div><strong>总流量</strong><span>接收 {formatTrafficGB(live?.network?.totalDown)}</span><span>发送 {formatTrafficGB(live?.network?.totalUp)}</span></div>
         {networkLatencies.length > 0 && <div className="network-latency-panel"><strong>三网延迟</strong>{networkLatencies.map((item) => <Tag key={item.taskId} size="small" color={item.latency == null ? 'brown' : latencyColor(item.latency)} variant="soft">{item.name} {item.latency == null ? '—' : item.latency} ms</Tag>)}</div>}
       </div>
       <Button type="dashed" size="small" block icon={<Icon name="icon-map" size={18} />} onClick={onDetails}>
@@ -412,7 +416,7 @@ function NodeListRow({ node, live, online, networkLatencies = [], onDetails }: {
       {trafficQuota && (
         <div className="row-stat">
           <span>配额</span>
-          <strong>{trafficQuota.pct}% ({formatBytes(trafficQuota.used)} / {formatBytes(trafficQuota.limit)})</strong>
+          <strong>{trafficQuota.pct}% ({formatTrafficGB(trafficQuota.used)} / {formatTrafficGB(trafficQuota.limit)})</strong>
           {trafficQuota.badgeText && <small style={{ fontSize: 10, color: '#2b7de9', display: 'block' }}>⟳ {trafficQuota.badgeText}</small>}
         </div>
       )}
@@ -769,7 +773,7 @@ export default function App() {
                 <Card color="app-orange" pattern="app-orange"><Image className="summary-item-icon" src={item351} alt="" width={40} height={40} color="app-orange" preview={false} /><div><span>服务器</span><strong>{onlineCount} / {nodes.length}</strong></div></Card>
                 <Card color="app-teal" pattern="app-teal"><Image className="summary-item-icon" src={item477} alt="" width={40} height={40} color="app-teal" preview={false} /><div><span>平均 CPU 使用率</span><strong>{formatPercent(averageCpu)}</strong></div></Card>
                 <Card color="app-blue" pattern="app-blue"><Icon name="icon-miles" size={34} /><div className="summary-network"><span>实时网络速率</span><strong><i>↓ 下行</i><b>{formatSpeed(speedDown)}</b></strong><strong><i>↑ 上行</i><b>{formatSpeed(speedUp)}</b></strong></div></Card>
-                <Card color="app-pink" pattern="app-pink"><Icon name="icon-critterpedia" size={34} /><div className="summary-network"><span>累计流量</span><strong><i>↓ 下行</i><b>{formatBytes(totalDown)}</b></strong><strong><i>↑ 上行</i><b>{formatBytes(totalUp)}</b></strong></div></Card>
+                <Card color="app-pink" pattern="app-pink"><Icon name="icon-critterpedia" size={34} /><div className="summary-network"><span>累计流量</span><strong><i>↓ 下行</i><b>{formatTrafficGB(totalDown)}</b></strong><strong><i>↑ 上行</i><b>{formatTrafficGB(totalUp)}</b></strong></div></Card>
               </div>
             </section>
           )}
