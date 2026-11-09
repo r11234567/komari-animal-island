@@ -2,9 +2,9 @@
   "name": "Komari Animal Island",
   "short": "AnimalIsland",
   "description": "使用 Animal Island UI 构建的温暖游戏风简单的 Komari 监控主题。",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "author": "JeraldMaster",
-  "url": "https://github.com/imbigbomb/komari-animal-island",
+  "url": "https://github.com/r11234567/komari-animal-island",
   "preview": "preview.png",
   "configuration": {
     "type": "managed",
