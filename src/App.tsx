@@ -11,6 +11,8 @@ import { connectLive, loadInitialData, loadNetworkLatencies, loadPingLatencies, 
 import type { NetworkLatency } from './api';
 import type { LiveState, NodeInfo, PublicSettings } from './types';
 import { saveAuthToken } from './auth';
+import { passwordLogin } from './connect';
+import { ConnectError } from '@connectrpc/connect';
 
 type ViewMode = 'grid' | 'list';
 type Appearance = 'light' | 'dark';
@@ -603,12 +605,7 @@ export default function App() {
 
   const resetPasswordStep = () => {
     if (challengeId) {
-      void fetch('/komari.credential.v1.PasswordLoginService/CancelPasswordLogin', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
-        body: JSON.stringify({}),
-      }).catch(() => {});
+      void passwordLogin.cancelPasswordLogin({}).catch(() => {});
     }
     setTwoFactorPending(false);
     setTwoFactorMode('otp');
@@ -663,50 +660,35 @@ export default function App() {
     setLoginLoading(true);
     setLoginError('');
     try {
-      const resp = await fetch('/komari.credential.v1.PasswordLoginService/BeginLoginVerification', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-          'Connect-Protocol-Version': '1',
-        },
-        body: JSON.stringify({ providerId }),
-      });
-      if (resp.ok) {
-        const data = await resp.json() as {
-          challengeId?: string;
-          challenge_id?: string;
-          promptType?: string;
-          prompt?: VerificationPromptInfo;
-        };
-        const cId = data.challengeId || data.challenge_id || '';
-        const prompt = data.prompt || {};
-        const isOtp =
-          prompt.charset === 'alphanumeric' ||
-          prompt.length === 8 ||
-          prompt.method === 'notification_otp' ||
-          providerId.includes('email') ||
-          providerId.includes('telegram');
+      const res = await passwordLogin.beginLoginVerification({ providerId });
+      const cId = res.challengeId;
+      const prompt = (res.prompt ?? {}) as Record<string, any>;
+      const isOtp =
+        prompt.charset === 'alphanumeric' ||
+        prompt.length === 8 ||
+        prompt.method === 'notification_otp' ||
+        providerId.includes('email') ||
+        providerId.includes('telegram');
 
-        setChallengeId(cId);
-        setActiveProviderId(providerId);
-        setTwoFactorMode(isOtp ? 'otp' : 'totp');
-        if (isOtp) {
-          const dest = prompt.destination || prompt.address || (providerId.includes('telegram') ? '绑定 Telegram' : 'you***@example.com');
-          setTargetAddress(dest);
-          setResendCooldown(prompt.cooldown || 60);
-        } else {
-          setTargetAddress('');
-          setResendCooldown(0);
-        }
-        return true;
+      setChallengeId(cId);
+      setActiveProviderId(providerId);
+      setTwoFactorMode(isOtp ? 'otp' : 'totp');
+      if (isOtp) {
+        const dest = (prompt.destination as string) || (prompt.address as string) || (providerId.includes('telegram') ? '绑定 Telegram' : '已绑定邮箱');
+        setTargetAddress(dest);
+        setResendCooldown(typeof prompt.cooldown === 'number' ? prompt.cooldown : 60);
+      } else {
+        setTargetAddress('');
+        setResendCooldown(0);
       }
-    } catch {
-      // 容错降级
+      return true;
+    } catch (err) {
+      const msg = err instanceof ConnectError ? err.rawMessage : (err instanceof Error ? err.message : '验证服务请求失败');
+      setLoginError(msg);
+      return false;
     } finally {
       setLoginLoading(false);
     }
-    return false;
   };
 
   const handleResendOtp = async () => {
@@ -724,62 +706,56 @@ export default function App() {
 
     // 1. 优先调用 Connect-RPC PasswordLoginService (komari 最新规范)
     try {
-      const beginResp = await fetch('/komari.credential.v1.PasswordLoginService/BeginPasswordLogin', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-          'Connect-Protocol-Version': '1',
-        },
-        body: JSON.stringify({ username, password }),
-      });
+      const beginResult = await passwordLogin.beginPasswordLogin({ username, password });
 
-      if (beginResp.ok) {
-        const beginResult = await beginResp.json() as {
-          authenticated?: boolean;
-          providers?: Array<{ id: string; displayName?: string; display_name?: string; kind?: number | string }>;
-        };
-
-        if (beginResult.authenticated) {
-          setSession({ loggedIn: true, username: username || '岛民' });
-          Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
-          window.setTimeout(() => {
-            window.location.href = '/admin/dashboard';
-          }, 350);
-          return;
-        }
-
-        // 规范逻辑：后端要求什么前端就用什么。
-        // 若后端配置了通知方式，返回的 provider 包含 native:email_otp 或 telegram_otp，并由后端自动发送验证码；
-        // 若未配置通知方式，仅启用 2FA，则使用 native:totp。
-        const rawProviders = beginResult.providers || [];
-        const chosen =
-          rawProviders.find((p) => p.id === 'native:email_otp' || p.id.includes('email')) ||
-          rawProviders.find((p) => p.id.includes('telegram')) ||
-          rawProviders[0];
-
-        const providerId = chosen?.id || 'native:totp';
-        setSavedCredentials({ username, password });
-        setTwoFactorPending(true);
-        setTwoFactorCode('');
-
-        const started = await startVerificationChallenge(providerId);
-        if (!started) {
-          const isOtp = providerId.includes('email') || providerId.includes('telegram');
-          setTwoFactorMode(isOtp ? 'otp' : 'totp');
-          setActiveProviderId(providerId);
-          if (isOtp) {
-            setTargetAddress(providerId.includes('telegram') ? '绑定 Telegram' : 'you***@example.com');
-            setResendCooldown(60);
-          }
-        }
+      if (beginResult.authenticated) {
+        setSession({ loggedIn: true, username: username || '岛民' });
+        Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
+        window.setTimeout(() => {
+          window.location.href = '/admin/dashboard';
+        }, 350);
         return;
       }
-    } catch {
-      // Connect-RPC 不可用时回退到 /api/login
+
+      // 规范逻辑：后端要求什么前端就用什么。
+      // 若后端配置了通知方式，返回的 provider 包含 native:email_otp 或 telegram_otp，并由后端自动发送验证码；
+      // 若未配置通知方式，仅启用 2FA，则使用 native:totp。
+      const rawProviders = beginResult.providers || [];
+      const chosen =
+        rawProviders.find((p) => p.id === 'native:email_otp' || p.id.includes('email')) ||
+        rawProviders.find((p) => p.id.includes('telegram')) ||
+        rawProviders[0];
+
+      if (!chosen) {
+        setLoginError('账号未配置可用的二次验证方式，请联系管理员。');
+        setLoginLoading(false);
+        return;
+      }
+
+      const providerId = chosen.id;
+      setSavedCredentials({ username, password });
+      setTwoFactorPending(true);
+      setTwoFactorCode('');
+
+      const started = await startVerificationChallenge(providerId);
+      if (!started) {
+        // 如果触发验证失败，停留在当前两步验证步骤展示错误，允许用户重新发送或返回
+        return;
+      }
+      return;
+    } catch (err) {
+      // 若 Connect-RPC 明确返回密码错误或限制，直接提示
+      if (err instanceof ConnectError) {
+        // 如果是 404 或未实现（旧版后端），才回退到 /api/login；否则直接提示错误
+        if (err.code !== 12 && err.code !== 5) {
+          setLoginError(err.rawMessage || '身份验证失败，请检查账号和密码。');
+          setLoginLoading(false);
+          return;
+        }
+      }
     }
 
-    // 2. 回退到 /api/login
+    // 2. 回退到 /api/login（兼容尚未升级 Connect-RPC 的极老版本 Komari）
     try {
       const response = await fetch('/api/login', {
         method: 'POST',
@@ -818,7 +794,6 @@ export default function App() {
         setTwoFactorPending(true);
         setTwoFactorCode('');
 
-        // 仅未配置联系方式时，后端返回 "2fa code is required" (TOTP 6位数字)
         const isTotp = msg.includes('2fa code is required');
         if (isTotp) {
           setTwoFactorMode('totp');
@@ -828,7 +803,7 @@ export default function App() {
         } else {
           setTwoFactorMode('otp');
           setActiveProviderId('native:email_otp');
-          setTargetAddress('绑定邮箱/私聊');
+          setTargetAddress('已绑定邮箱/私聊');
           setResendCooldown(60);
         }
         return;
@@ -866,42 +841,30 @@ export default function App() {
     // 1. 若拥有 challengeId，优先走 Connect-RPC CompletePasswordLogin
     if (challengeId) {
       try {
-        const resp = await fetch('/komari.credential.v1.PasswordLoginService/CompletePasswordLogin', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: {
-            'Content-Type': 'application/json',
-            'Connect-Protocol-Version': '1',
-          },
-          body: JSON.stringify({
-            challengeId,
-            proof: {
-              code: finalCode,
-            },
-          }),
+        const result = await passwordLogin.completePasswordLogin({
+          challengeId,
+          proof: {
+            code: finalCode,
+          } as any,
         });
 
-        if (resp.ok) {
-          const result = await resp.json() as { authenticated?: boolean };
-          if (result.authenticated) {
-            setSession({ loggedIn: true, username: savedCredentials.username || '岛民' });
-            Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
-            window.setTimeout(() => {
-              window.location.href = '/admin/dashboard';
-            }, 350);
-            return;
-          }
+        if (result.authenticated) {
+          setSession({ loggedIn: true, username: savedCredentials.username || '岛民' });
+          Notification.success({ message: '欢迎回来，岛民', description: '身份验证成功，正在前往管理后台。' });
+          window.setTimeout(() => {
+            window.location.href = '/admin/dashboard';
+          }, 350);
+          return;
         }
-        const errJson = await resp.json().catch(() => ({})) as { message?: string };
-        setLoginError(errJson.message || '验证码错误或已失效，请重新输入。');
+      } catch (err) {
+        const msg = err instanceof ConnectError ? err.rawMessage : (err instanceof Error ? err.message : '验证码错误或已失效');
+        setLoginError(msg || '验证码错误或已失效，请重新输入。');
         setLoginLoading(false);
         return;
-      } catch {
-        // 回退到 /api/login
       }
     }
 
-    // 2. 回退到 /api/login
+    // 2. 回退到 /api/login（兼容模式）
     try {
       const response = await fetch('/api/login', {
         method: 'POST',
@@ -932,7 +895,7 @@ export default function App() {
         }, 350);
         return;
       }
-      setLoginError(result.message || '两步验证码错误，请重新输入。');
+      setLoginError(result.message || '验证码错误，请重新输入。');
     } catch {
       setLoginError('无法连接验证服务，请稍后重试。');
     } finally {
